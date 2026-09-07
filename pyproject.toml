@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "Proprietary" }
 authors = [{ name = "SmartCart" }]
-dependencies = []
+dependencies = [
+    "pg8000>=1.31.5",
+]
 
 [dependency-groups]
 dev = [
@@ -15,6 +17,7 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "pre-commit>=3.7",
+    "pgserver>=0.1.4",
 ]
 
 [tool.uv]
@@ -58,6 +61,12 @@ warn_unused_configs = true
 [[tool.mypy.overrides]]
 module = "smartcart.*"
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# pg8000 ships no py.typed marker/stubs, and no types-pg8000 stub package
+# exists on PyPI (see docs/adr/0009-focused-db-spike.md).
+module = "pg8000.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
