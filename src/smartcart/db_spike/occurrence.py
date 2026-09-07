@@ -86,7 +86,8 @@ def get_occurrence(conn: pg8000.native.Connection, occurrence_id: int) -> dict[s
     rows = conn.run(
         """
         SELECT occurrence_id, content_id, ingestion_run_id, chain_id, store_id, artifact_kind,
-               source_filename, schema_family, collected_at, validation_status, validation_detail
+               source_filename, schema_family, collected_at, validation_status, validation_detail,
+               activation_completed_at, activation_outcome
         FROM artifact_occurrence WHERE occurrence_id = :occurrence_id
         """,
         occurrence_id=occurrence_id,

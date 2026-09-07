@@ -47,6 +47,15 @@ def _pg_server() -> Iterator[PostgresServer]:
 
 
 @pytest.fixture
+def db_dsn(_pg_server: PostgresServer) -> str:
+    """The running pgserver instance's DSN, for tests that must open more
+    than one connection against the same database (real cross-connection
+    PostgreSQL concurrency) -- db_conn only gives you one."""
+    uri: str = _pg_server.get_uri()
+    return uri
+
+
+@pytest.fixture
 def db_conn(_pg_server: PostgresServer) -> Iterator[pg8000.native.Connection]:
     conn = connect(_pg_server.get_uri())
     try:

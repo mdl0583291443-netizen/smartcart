@@ -40,5 +40,9 @@ def test_migrations_create_exactly_the_expected_tables(db_conn: pg8000.native.Co
 
 
 def test_migrations_are_tracked_in_schema_migrations(db_conn: pg8000.native.Connection) -> None:
-    rows = db_conn.run("SELECT version FROM schema_migrations")
-    assert [row[0] for row in rows] == ["0001_initial_schema.sql"]
+    rows = db_conn.run("SELECT version FROM schema_migrations ORDER BY version")
+    assert [row[0] for row in rows] == [
+        "0001_initial_schema.sql",
+        "0002_round2_activation.sql",
+        "0003_activation_outcome.sql",
+    ]
