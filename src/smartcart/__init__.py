@@ -1,0 +1,3 @@
+"""SmartCart: channel-independent grocery shopping engine (working title)."""
+
+__version__ = "0.1.0"
