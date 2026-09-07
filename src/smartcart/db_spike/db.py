@@ -37,14 +37,28 @@ def get_dsn() -> str:
 
 
 def connect(dsn: str | None = None) -> pg8000.native.Connection:
-    """Open one connection to the spike database from a postgresql:// URI."""
+    """Open one connection to the spike database from a postgresql:// URI.
+
+    Most URIs name a TCP host via `parsed.hostname`. Some servers (e.g.
+    pgserver on Linux/WSL) instead publish a Unix-domain socket directory
+    in the `host` query parameter, per libpq convention -- pg8000 has no
+    equivalent of that convention, so it must be translated into the full
+    socket file path (`<dir>/.s.PGSQL.<port>`) it expects as `unix_sock`.
+    """
     parsed = urllib.parse.urlsplit(dsn or get_dsn())
+    query_host = urllib.parse.parse_qs(parsed.query).get("host", [None])[0]
+    connect_kwargs: dict[str, object]
+    if query_host and query_host.startswith("/"):
+        port = parsed.port or 5432
+        connect_kwargs = {"unix_sock": f"{query_host}/.s.PGSQL.{port}"}
+    else:
+        connect_kwargs = {"host": parsed.hostname, "port": parsed.port}
+
     return pg8000.native.Connection(
         user=parsed.username or "postgres",
         password=parsed.password or "",
-        host=parsed.hostname,
-        port=parsed.port,
         database=parsed.path.lstrip("/") or "postgres",
+        **connect_kwargs,
     )
 
 
