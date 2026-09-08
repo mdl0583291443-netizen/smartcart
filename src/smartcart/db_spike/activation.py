@@ -158,6 +158,28 @@ class ProductPrice:
     price_raw: str
 
 
+@dataclass(frozen=True)
+class NormalizedActivationItem:
+    """One item's normalized-contract facts for the normalized activation
+    input mode (Schema Slice 2, docs/adr/0011). resolved_store_id is the
+    SmartCart surrogate store identity, already resolved outside this
+    module (see catalog.py) -- never a raw retailer store identifier.
+    normalization_contract_version is not a field here: it is assigned
+    internally by normalized persistence, not supplied by the caller."""
+
+    retailer_chain_id: str
+    resolved_store_id: int
+    item_code_raw: str
+    price: Decimal
+    price_raw: str
+    product_name: str
+    declared_quantity: Decimal
+    declared_quantity_raw: str
+    declared_quantity_unit_raw: str
+    is_weighted: bool | None
+    collected_at: datetime
+
+
 class ActivationOutcome(Enum):
     """Terminal result of one activate_occurrence call."""
 
@@ -213,11 +235,26 @@ def _current_price(
     return price
 
 
+@dataclass(frozen=True)
+class _EffectiveItem:
+    """Private, internal-only per-item view the single product loop below
+    iterates over -- never exposed outside this module. `normalized` is
+    None for a legacy ProductPrice-sourced item; set to the originating
+    NormalizedActivationItem for a normalized-mode item, carrying the
+    normalized facts the CurrentState write branch below needs."""
+
+    item_code_raw: str
+    price: Decimal
+    price_raw: str
+    normalized: NormalizedActivationItem | None
+
+
 def activate_occurrence(
     conn: pg8000.native.Connection,
     *,
     occurrence_id: int,
     products: Sequence[ProductPrice],
+    normalized_items: Sequence[NormalizedActivationItem] = (),
     on_checkpoint: Callable[[str, int], None] | None = None,
 ) -> ActivationOutcome:
     """Activate every product in one already-durable, valid, store-scoped
@@ -285,7 +322,39 @@ def activate_occurrence(
     use it to inject a failure (raise) to prove rollback, or to pause
     (block) to prove one store's held lock does not block another
     store's activation.
+
+    normalized_items is Schema Slice 2 (docs/adr/0011): when given, every
+    item is validated against this occurrence's own chain_id/store_id/
+    collected_at (exact equality, no tolerance/coercion) before any
+    CurrentState/price_history mutation begins for this occurrence -- a
+    mismatch raises ValueError and leaves the occurrence unresolved,
+    exactly like the existing "occurrence does not exist"/wrong-kind/
+    wrong-validation-status checks above, never as DEFERRED or
+    STALE_PRESERVED or ALREADY_APPLIED. Once validated, each normalized
+    item's product_name, declared_quantity, declared_quantity_raw,
+    declared_quantity_unit_raw, and is_weighted are written to
+    CurrentState alongside current_price/current_price_raw, with
+    normalization_contract_version set internally to 1 (never caller-
+    supplied); price_history is written identically to the legacy path
+    (price-only) in both modes. Exactly one of products/normalized_items
+    is expected to be non-empty; that input-mode contract is not yet
+    enforced here.
     """
+    effective_items: list[_EffectiveItem] = (
+        [
+            _EffectiveItem(
+                item_code_raw=p.item_code_raw, price=p.price, price_raw=p.price_raw, normalized=None
+            )
+            for p in products
+        ]
+        if not normalized_items
+        else [
+            _EffectiveItem(
+                item_code_raw=n.item_code_raw, price=n.price, price_raw=n.price_raw, normalized=n
+            )
+            for n in normalized_items
+        ]
+    )
     try:
         with transaction(conn):
             identity_rows = conn.run(
@@ -309,6 +378,27 @@ def activate_occurrence(
                     f"{validation_status!r}, not 'valid'; a non-valid occurrence never "
                     "has derived state and must not be activated."
                 )
+
+            if normalized_items:
+                for normalized_item in normalized_items:
+                    if normalized_item.retailer_chain_id != chain_id:
+                        raise ValueError(
+                            f"NormalizedActivationItem.retailer_chain_id "
+                            f"{normalized_item.retailer_chain_id!r} does not match occurrence "
+                            f"{occurrence_id}'s chain_id {chain_id!r}."
+                        )
+                    if normalized_item.resolved_store_id != store_id:
+                        raise ValueError(
+                            f"NormalizedActivationItem.resolved_store_id "
+                            f"{normalized_item.resolved_store_id!r} does not match occurrence "
+                            f"{occurrence_id}'s store_id {store_id!r}."
+                        )
+                    if normalized_item.collected_at != collected_at:
+                        raise ValueError(
+                            f"NormalizedActivationItem.collected_at "
+                            f"{normalized_item.collected_at!r} does not match occurrence "
+                            f"{occurrence_id}'s collected_at {collected_at!r}."
+                        )
 
             conn.run(
                 "SELECT store_id FROM store WHERE store_id = :store_id FOR UPDATE",
@@ -365,7 +455,7 @@ def activate_occurrence(
                     )
                     outcome = ActivationOutcome.STALE_PRESERVED
                 else:
-                    for index, product in enumerate(products):
+                    for index, item in enumerate(effective_items):
                         if on_checkpoint is not None:
                             on_checkpoint(_CHECKPOINT_BEFORE_CURRENT_STATE, index)
 
@@ -373,36 +463,82 @@ def activate_occurrence(
                             conn,
                             chain_id=chain_id,
                             store_id=store_id,
-                            item_code_raw=product.item_code_raw,
+                            item_code_raw=item.item_code_raw,
                         )
-                        conn.run(
-                            """
-                            INSERT INTO store_product_current_state (
-                                chain_id, store_id, item_code_raw, current_price,
-                                current_price_raw, source_occurrence_id, updated_at
-                            ) VALUES (
-                                :chain_id, :store_id, :item_code_raw, :price, :price_raw,
-                                :occurrence_id, :collected_at
+                        if item.normalized is None:
+                            conn.run(
+                                """
+                                INSERT INTO store_product_current_state (
+                                    chain_id, store_id, item_code_raw, current_price,
+                                    current_price_raw, source_occurrence_id, updated_at
+                                ) VALUES (
+                                    :chain_id, :store_id, :item_code_raw, :price, :price_raw,
+                                    :occurrence_id, :collected_at
+                                )
+                                ON CONFLICT (chain_id, store_id, item_code_raw) DO UPDATE SET
+                                    current_price = excluded.current_price,
+                                    current_price_raw = excluded.current_price_raw,
+                                    source_occurrence_id = excluded.source_occurrence_id,
+                                    updated_at = excluded.updated_at
+                                """,
+                                chain_id=chain_id,
+                                store_id=store_id,
+                                item_code_raw=item.item_code_raw,
+                                price=item.price,
+                                price_raw=item.price_raw,
+                                occurrence_id=occurrence_id,
+                                collected_at=collected_at,
                             )
-                            ON CONFLICT (chain_id, store_id, item_code_raw) DO UPDATE SET
-                                current_price = excluded.current_price,
-                                current_price_raw = excluded.current_price_raw,
-                                source_occurrence_id = excluded.source_occurrence_id,
-                                updated_at = excluded.updated_at
-                            """,
-                            chain_id=chain_id,
-                            store_id=store_id,
-                            item_code_raw=product.item_code_raw,
-                            price=product.price,
-                            price_raw=product.price_raw,
-                            occurrence_id=occurrence_id,
-                            collected_at=collected_at,
-                        )
+                        else:
+                            normalized = item.normalized
+                            conn.run(
+                                """
+                                INSERT INTO store_product_current_state (
+                                    chain_id, store_id, item_code_raw, current_price,
+                                    current_price_raw, source_occurrence_id, updated_at,
+                                    product_name, declared_quantity, declared_quantity_raw,
+                                    declared_quantity_unit_raw, is_weighted,
+                                    normalization_contract_version
+                                ) VALUES (
+                                    :chain_id, :store_id, :item_code_raw, :price, :price_raw,
+                                    :occurrence_id, :collected_at,
+                                    :product_name, :declared_quantity, :declared_quantity_raw,
+                                    :declared_quantity_unit_raw, :is_weighted,
+                                    :normalization_contract_version
+                                )
+                                ON CONFLICT (chain_id, store_id, item_code_raw) DO UPDATE SET
+                                    current_price = excluded.current_price,
+                                    current_price_raw = excluded.current_price_raw,
+                                    source_occurrence_id = excluded.source_occurrence_id,
+                                    updated_at = excluded.updated_at,
+                                    product_name = excluded.product_name,
+                                    declared_quantity = excluded.declared_quantity,
+                                    declared_quantity_raw = excluded.declared_quantity_raw,
+                                    declared_quantity_unit_raw =
+                                        excluded.declared_quantity_unit_raw,
+                                    is_weighted = excluded.is_weighted,
+                                    normalization_contract_version =
+                                        excluded.normalization_contract_version
+                                """,
+                                chain_id=chain_id,
+                                store_id=normalized.resolved_store_id,
+                                item_code_raw=item.item_code_raw,
+                                price=item.price,
+                                price_raw=item.price_raw,
+                                occurrence_id=occurrence_id,
+                                collected_at=collected_at,
+                                product_name=normalized.product_name,
+                                declared_quantity=normalized.declared_quantity,
+                                declared_quantity_raw=normalized.declared_quantity_raw,
+                                declared_quantity_unit_raw=normalized.declared_quantity_unit_raw,
+                                is_weighted=normalized.is_weighted,
+                                normalization_contract_version=1,
+                            )
 
                         if on_checkpoint is not None:
                             on_checkpoint(_CHECKPOINT_AFTER_CURRENT_STATE, index)
 
-                        if existing_price is None or existing_price != product.price:
+                        if existing_price is None or existing_price != item.price:
                             conn.run(
                                 """
                                 INSERT INTO price_history (
@@ -417,9 +553,9 @@ def activate_occurrence(
                                 """,
                                 chain_id=chain_id,
                                 store_id=store_id,
-                                item_code_raw=product.item_code_raw,
-                                price=product.price,
-                                price_raw=product.price_raw,
+                                item_code_raw=item.item_code_raw,
+                                price=item.price,
+                                price_raw=item.price_raw,
                                 collected_at=collected_at,
                                 occurrence_id=occurrence_id,
                             )
