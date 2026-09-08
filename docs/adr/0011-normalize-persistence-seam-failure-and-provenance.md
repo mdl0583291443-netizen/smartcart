@@ -124,7 +124,21 @@ On `STALE_PRESERVED` or `ALREADY_APPLIED`, none of these fields — including
 `normalization_contract_version` — are mutated, exactly like every other
 `store_product_current_state` column today.
 
-### 5. Temporal limitation — quantity history
+### 5. Pre-mutation occurrence/item consistency guards
+
+The normalize-to-persistence seam introduces three new consistency invariants, validated before any `CurrentState`/`price_history` mutation begins for an occurrence:
+
+- **Chain agreement.** For every `NormalizedPriceItem` being persisted as part of an occurrence, `item.retailer_chain_id` must exactly equal the occurrence's `chain_id`.
+- **Store agreement.** The raw retailer `store_id` continues to be resolved outside normalization through the existing store-alias mechanism (unchanged). The resolved SmartCart surrogate store ID used for persistence must exactly equal the occurrence's `store_id`.
+- **`collected_at` agreement.** Every item's `collected_at` must exactly equal the occurrence's `collected_at`. No tolerance, normalization, rounding, or timestamp rewriting is permitted at this boundary.
+
+A mismatch on any of these three is a seam/caller construction error, not a legitimate business state, and must cause the persistence attempt to fail rather than silently write inconsistent data.
+
+These guards must be evaluated before mutation begins and must not introduce per-item transaction boundaries — the existing one-transaction-per-occurrence atomicity (§1(F), §4) is unchanged.
+
+**Explicitly out of scope for these guards:** changes to the frozen `NormalizedPriceItem` v1 contract (no occurrence-context fields are added to it); redesign of store-alias resolution; partial acceptance; per-item commits; new failure-classification machinery. These remain governed by ADR 0011 §1 and §2 as already written.
+
+### 6. Temporal limitation — quantity history
 
 `store_product_current_state` stores the latest normalized source facts;
 `price_history` remains price-only. This slice does not add normalized
@@ -135,13 +149,16 @@ evidence. This is a deliberate, deferred gap, not accidental data loss (see
 also the reverse-gap analysis in the prior normalize↔persistence inspection
 and the requirements/invariants inspection that preceded this ADR).
 
-### 6. What is frozen now vs. deferred
+### 7. What is frozen now vs. deferred
 
 **Frozen now:**
 - Current conservative whole-occurrence failure behavior (no partial
   acceptance).
 - The classification safety principles (A)–(F) above.
 - Occurrence-level atomicity must remain; no per-item transaction commits.
+- Chain/store/`collected_at` agreement between each `NormalizedPriceItem`
+  and its occurrence must be validated before mutation; a mismatch is a
+  construction error, not a partial-acceptance case.
 - No legacy backfill in this slice.
 - `normalization_contract_version` semantics (nullable int; `NULL` = legacy,
   `1` = current contract version; `>= 1` when set; describes contract
