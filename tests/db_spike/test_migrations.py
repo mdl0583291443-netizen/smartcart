@@ -45,4 +45,5 @@ def test_migrations_are_tracked_in_schema_migrations(db_conn: pg8000.native.Conn
         "0001_initial_schema.sql",
         "0002_round2_activation.sql",
         "0003_activation_outcome.sql",
+        "0004_normalized_current_state_facts.sql",
     ]
