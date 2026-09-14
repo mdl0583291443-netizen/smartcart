@@ -3,15 +3,17 @@ mapping.
 
 `raw` is intentionally typed as `object` and, internally, is accessed only
 via duck-typed dict lookups (`.get()`), never a declared type. The dict
-shape this code reads (chain_id/store_id/promotions[].{promotion_id,
-description, start_at, end_at, <family facts>, items[].{item_code, <family
-facts>}}) is an INTERNAL PROVISIONAL SEAM only -- the same shape the
+shape this code reads for Standard is now
+chain_id/store_id/promotions[].{promotion_id, description, start_at,
+end_at, is_gift_item, min_no_of_item_offered, groups[].{group_id,
+discount_type, min_purchase_amount, items[].{item_code, <item economics>}}}
+-- Promotion -> Group -> PromotionItem, mirroring real Standard XML's own
+nesting. Online's shape is unchanged: promotions[].{..., items[].{item_code,
+<identity facts>}}, no Group concept. Neither shape is a production parser
+DTO or public API -- both are the same INTERNAL PROVISIONAL SEAM the
 approved test suite's private `_standard_occurrence`/`_online_occurrence`
-builders produce. It is NOT a production parser DTO, NOT a public API, and
-NOT the future XML parser's contract: no Standard-family Groups -> Group ->
-PromotionItems nesting is mirrored here. When a real Promotions parser is
-designed, this internal shape is expected to be reworked, not merely
-re-pointed.
+builders produce; when a real Promotions parser is designed, this internal
+shape is expected to be reworked, not merely re-pointed.
 
 Both entry points are occurrence-level and all-or-none: every promotion and
 membership in `raw` is validated before anything is returned. If any
@@ -20,11 +22,14 @@ a promotion's promotion_id, an item's item_code) or `raw` itself is not
 dict-shaped, `ValueError` is raised -- the established normalization-layer
 convention already used by `normalize/rami_levy.py` and
 `normalize/shufersal.py`'s `_require()` for a required-field contract
-violation -- and no normalized promotion or membership from that occurrence
-is returned, even ones already found valid. Every other raw value (opaque
-codes, non-boolean flags, unfamiliar RewardType/DiscountType values, etc.)
-is preserved exactly as supplied, with no coercion, parsing, or derived
-economics.
+violation -- and no normalized promotion, group, or membership from that
+occurrence is returned, even ones already found valid. Every other raw
+value (opaque codes, non-boolean flags, unfamiliar RewardType/DiscountType
+values, duplicate or missing raw GroupID, etc.) is preserved exactly as
+supplied, with no coercion, parsing, validation, or derived economics --
+GroupID is never used as structural identity or deduplication key; a
+Standard Group's structural identity is its 0-based `group_index`, the
+position it was encountered at within its Promotion's `groups` list.
 """
 
 from __future__ import annotations
@@ -33,9 +38,11 @@ from datetime import datetime
 
 from smartcart.normalize.promotion_contract import (
     NormalizedPromotion,
+    NormalizedPromotionGroup,
     NormalizedPromotionMembership,
     OnlineMembershipFacts,
     OnlinePromotionFacts,
+    StandardGroupFacts,
     StandardMembershipFacts,
     StandardPromotionFacts,
 )
@@ -64,9 +71,14 @@ def normalize_standard_promotions_occurrence(
     raw: object,
     *,
     collected_at: datetime,
-) -> tuple[list[NormalizedPromotion], list[NormalizedPromotionMembership]]:
+) -> tuple[
+    list[NormalizedPromotion],
+    list[NormalizedPromotionGroup],
+    list[NormalizedPromotionMembership],
+]:
     """Map one complete Standard-family Promotions occurrence (every
-    promotion and membership it contains) to the normalized contract."""
+    promotion, group, and membership it contains) to the normalized
+    contract."""
     occurrence, chain_id, store_id = _require_occurrence_scope(raw)
 
     raw_promotions = occurrence.get("promotions", [])
@@ -76,6 +88,7 @@ def normalize_standard_promotions_occurrence(
         )
 
     promotions: list[NormalizedPromotion] = []
+    groups: list[NormalizedPromotionGroup] = []
     memberships: list[NormalizedPromotionMembership] = []
     for promo in raw_promotions:
         promotion_id = promo.get("promotion_id")
@@ -94,33 +107,49 @@ def normalize_standard_promotions_occurrence(
                 start_at_raw=promo.get("start_at"),
                 end_at_raw=promo.get("end_at"),
                 collected_at=collected_at,
-                family_facts=StandardPromotionFacts(is_gift_item_raw=promo.get("is_gift_item")),
+                family_facts=StandardPromotionFacts(
+                    is_gift_item_raw=promo.get("is_gift_item"),
+                    min_no_of_item_offered_raw=promo.get("min_no_of_item_offered"),
+                ),
             )
         )
 
-        for item in promo.get("items", []):
-            item_code = item.get("item_code")
-            if item_code is None:
-                raise ValueError(
-                    "normalization contract violation: required membership field "
-                    "'item_code' was None"
-                )
-            memberships.append(
-                NormalizedPromotionMembership(
+        for group_index, group in enumerate(promo.get("groups", [])):
+            groups.append(
+                NormalizedPromotionGroup(
                     promotion_id_raw=promotion_id,
-                    retailer_item_id_raw=item_code,
-                    family_facts=StandardMembershipFacts(
-                        reward_type_raw=item.get("reward_type"),
-                        discount_rate_raw=item.get("discount_rate"),
-                        discounted_price_raw=item.get("discounted_price"),
-                        min_qty_raw=item.get("min_qty"),
-                        min_no_of_item_offered_raw=item.get("min_no_of_item_offered"),
-                        max_qty_raw=item.get("max_qty"),
+                    group_index=group_index,
+                    family_facts=StandardGroupFacts(
+                        group_id_raw=group.get("group_id"),
+                        discount_type_raw=group.get("discount_type"),
+                        min_purchase_amount_raw=group.get("min_purchase_amount"),
                     ),
                 )
             )
 
-    return promotions, memberships
+            for item in group.get("items", []):
+                item_code = item.get("item_code")
+                if item_code is None:
+                    raise ValueError(
+                        "normalization contract violation: required membership field "
+                        "'item_code' was None"
+                    )
+                memberships.append(
+                    NormalizedPromotionMembership(
+                        promotion_id_raw=promotion_id,
+                        retailer_item_id_raw=item_code,
+                        group_index=group_index,
+                        family_facts=StandardMembershipFacts(
+                            reward_type_raw=item.get("reward_type"),
+                            discount_rate_raw=item.get("discount_rate"),
+                            discounted_price_raw=item.get("discounted_price"),
+                            min_qty_raw=item.get("min_qty"),
+                            max_qty_raw=item.get("max_qty"),
+                        ),
+                    )
+                )
+
+    return promotions, groups, memberships
 
 
 def normalize_online_promotions_occurrence(
@@ -181,6 +210,7 @@ def normalize_online_promotions_occurrence(
                 NormalizedPromotionMembership(
                     promotion_id_raw=promotion_id,
                     retailer_item_id_raw=item_code,
+                    group_index=None,
                     family_facts=OnlineMembershipFacts(
                         is_gift_item_raw=item.get("is_gift_item"),
                         item_type_raw=item.get("item_type"),

@@ -56,12 +56,16 @@ from typing import Literal
 class StandardPromotionFacts:
     """Promotion-level facts specific to the Standard source family.
 
-    Standard-family promotion economics live at the membership
-    (PromotionItem) level, not here -- see `StandardMembershipFacts`. At
-    the promotion level, only the gift-item flag was evidenced.
+    Standard-family item-level economics (RewardType, DiscountRate,
+    DiscountedPrice, MinQty, MaxQty) live at the membership (PromotionItem)
+    level, not here -- see `StandardMembershipFacts`. MinNoOfItemOffered is
+    the one economics-adjacent field evidenced at Promotion level in real
+    source XML, not PromotionItem level -- it lives here, not on
+    `StandardMembershipFacts`, and is never duplicated onto any membership.
     """
 
     is_gift_item_raw: str | None
+    min_no_of_item_offered_raw: str | None
 
 
 @dataclass(frozen=True)
@@ -120,15 +124,53 @@ class NormalizedPromotion:
 @dataclass(frozen=True)
 class StandardMembershipFacts:
     """Membership (PromotionItem)-level facts specific to the Standard
-    source family -- this is where Standard-family promotion economics
-    were evidenced to live, not at the promotion level."""
+    source family -- this is where Standard-family item-level promotion
+    economics were evidenced to live, not at the promotion level.
+    MinNoOfItemOffered is deliberately absent here: it is Promotion-level
+    (see `StandardPromotionFacts`), not PromotionItem-level.
+    """
 
     reward_type_raw: str | None
     discount_rate_raw: str | None
     discounted_price_raw: str | None
     min_qty_raw: str | None
-    min_no_of_item_offered_raw: str | None
     max_qty_raw: str | None
+
+
+@dataclass(frozen=True)
+class StandardGroupFacts:
+    """Group-level facts specific to the Standard source family, evidenced
+    directly under real Standard XML's Promotion -> Groups -> Group
+    nesting. Preserved exactly as raw strings -- no enum interpretation,
+    no economic interpretation, no semantic coercion of GroupID,
+    DiscountType, or MinPurchaseAmount.
+    """
+
+    group_id_raw: str | None
+    discount_type_raw: str | None
+    min_purchase_amount_raw: str | None
+
+
+@dataclass(frozen=True)
+class NormalizedPromotionGroup:
+    """One Standard-family Group, shared identity plus its raw Group
+    facts.
+
+    Joined to its `NormalizedPromotion` by `promotion_id_raw`, the same
+    convention `NormalizedPromotionMembership` already uses. `group_index`
+    is a 0-based, occurrence-local structural position derived from source
+    Group order -- it is NOT retailer identity and NOT durable across
+    files/occurrences; it exists solely so memberships can be linked back
+    to their exact source Group even when raw GroupID is duplicated,
+    missing, or otherwise unsuitable as identity. Online has no Group
+    concept, so this type is Standard-only -- no `source_family`
+    discriminator field exists here (unlike `NormalizedPromotion`), since
+    only Standard ever produces one.
+    """
+
+    promotion_id_raw: str
+    group_index: int
+    family_facts: StandardGroupFacts
 
 
 @dataclass(frozen=True)
@@ -153,8 +195,14 @@ class NormalizedPromotionMembership:
     promotion may have many memberships; one SKU (`retailer_item_id_raw`)
     may appear in many promotions' memberships -- never merged or
     deduplicated here.
+
+    `group_index` links a Standard membership to its exact source
+    `NormalizedPromotionGroup` (see that type's docstring for what
+    `group_index` is and is not). It is `None` for Online memberships,
+    which have no Group concept at all.
     """
 
     promotion_id_raw: str
     retailer_item_id_raw: str
     family_facts: StandardMembershipFacts | OnlineMembershipFacts
+    group_index: int | None

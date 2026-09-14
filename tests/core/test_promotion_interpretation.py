@@ -49,7 +49,6 @@ def test_pe_i02_rami_standard_real_evidence_interprets_required_qty_and_bundle_t
         discounted_price_raw="30.00",
         min_qty_raw="10",
         # Non-load-bearing -- see reward_type_raw/discount_rate_raw above.
-        min_no_of_item_offered_raw=None,
         max_qty_raw=None,
     )
 
@@ -100,7 +99,6 @@ def test_pe_i10_rami_standard_missing_min_qty_raises_value_error() -> None:
         discount_rate_raw=None,
         discounted_price_raw="30.00",
         min_qty_raw=None,
-        min_no_of_item_offered_raw=None,
         max_qty_raw=None,
     )
 
@@ -162,7 +160,6 @@ def test_pe_i10_rami_standard_unparseable_discounted_price_raises_value_error() 
         discount_rate_raw=None,
         discounted_price_raw="not-a-number",
         min_qty_raw="10",
-        min_no_of_item_offered_raw=None,
         max_qty_raw=None,
     )
 
@@ -185,7 +182,6 @@ def test_pe_i10_fixed_bundle_quantity_is_not_silently_truncated() -> None:
         discount_rate_raw=None,
         discounted_price_raw="30.00",
         min_qty_raw="10.50",
-        min_no_of_item_offered_raw=None,
         max_qty_raw=None,
     )
 

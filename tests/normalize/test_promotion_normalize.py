@@ -1,51 +1,69 @@
-"""Phase 1 RED tests for the approved Promotions Stage-1 normalization
-contract (`smartcart.normalize.promotion_contract`) and its two
-occurrence-level entry points (`smartcart.normalize.promotion`).
+"""RED tests for the approved Promotions Stage-1 normalization contract
+(`smartcart.normalize.promotion_contract`) and its two occurrence-level
+entry points (`smartcart.normalize.promotion`).
 
-Unlike the PriceFull FIRST RED tests (test_shufersal_normalize.py,
-test_rami_levy_normalize.py), which were RED because `normalize_item` did
-not exist at all, `normalize_standard_promotions_occurrence` and
-`normalize_online_promotions_occurrence` already exist as an approved
-skeleton that unconditionally raises `NotImplementedError` -- no parsing,
-mapping, or validation happens yet. Every behavioral test below therefore
-calls the real public entry point directly, uncaught: the call itself
-raises `NotImplementedError` before any assertion below it can run. Those
-assertions are deliberately left in place (not commented out, not wrapped
-in `pytest.raises`) because they encode the frozen, evidence-backed mapping
-this contract commits to -- exactly as the PriceFull FIRST RED tests fixed
-their mapping ahead of implementation. Once a real parser/normalizer lands,
-`NotImplementedError` stops firing and these assertions become live,
-without needing to be rewritten.
+`normalize_standard_promotions_occurrence` and
+`normalize_online_promotions_occurrence` are fully implemented today for
+the pre-Group-preservation contract shape (2-tuple return,
+StandardMembershipFacts carrying min_no_of_item_offered_raw, no Group
+concept). This file now also encodes the FROZEN Group-preservation target
+contract (SG-01..SG-15, Group-preservation test matrix SG-T01..SG-T11):
+Standard gains a Group layer (`NormalizedPromotionGroup`,
+`StandardGroupFacts`, `group_index` on memberships), MinNoOfItemOffered
+relocates from StandardMembershipFacts to StandardPromotionFacts, and
+`normalize_standard_promotions_occurrence` changes its return arity to a
+3-tuple `(promotions, groups, memberships)`. None of this exists in
+production yet -- every test exercising it is expected to be RED, for one
+of two clean, attributable reasons:
+
+- calling `normalize_standard_promotions_occurrence` and unpacking its
+  return into three names raises `ValueError: not enough values to unpack`
+  today, because the function still returns a 2-tuple; this is the RED
+  reason for nearly every Standard-family test in this file, including
+  ones (T-A, T-C, T-D, etc.) whose own behavioral point predates Group
+  preservation entirely -- they still must unpack the frozen 3-tuple shape
+  to stay forward-consistent with the target contract;
+- accessing `.group_index` on a `NormalizedPromotionMembership`, or
+  importing `NormalizedPromotionGroup`/`StandardGroupFacts` from
+  `smartcart.normalize.promotion_contract`, fails today because neither
+  exists in production yet. Those two names are deliberately imported
+  LOCALLY, inside only the specific test functions that need them (T-G/
+  SG-T01, SG-T02) -- never at module level -- so that importing them does
+  not collapse the ENTIRE file's collection into one undifferentiated
+  ImportError and mask every other test's own, more specific RED reason.
+
+Online-family tests are unaffected except SG-T11, which specifically
+proves `group_index is None` on Online memberships -- Online's own 2-tuple
+return and existing economics stay exactly as before.
 
 `raw` is test-local, ad hoc nested dicts only -- never a new production
 dataclass. The skeleton's public signature accepts `raw: object`
 specifically because no Promotions raw parser contract has been designed
-yet (that is out of scope here, same as it was for the skeleton itself);
-inventing one now, even test-only, would freeze an unjustified production
-parser API. `_standard_occurrence`/`_online_occurrence` below are the sole,
-centralized construction point for that synthetic nesting -- TEST
-SCAFFOLDING ONLY. Their internal dict shape reads naturally against the
-frozen contract's own field names but is not meaningful to the skeleton
-today (it is unconditionally ignored by the `raise`), does not attempt to
-mirror the Standard family's observed Groups -> Group -> PromotionItems XML
-nesting, and must never be read as the future real parser/XML DTO -- that
-remains a separate, not-yet-made design decision.
+yet (that remains out of scope here); inventing one now, even test-only,
+would freeze an unjustified production parser API.
+`_standard_occurrence`/`_online_occurrence` below are the sole, centralized
+construction point for that synthetic nesting -- TEST SCAFFOLDING ONLY.
+`_standard_occurrence`'s internal shape now nests items under
+`groups[].items` (previously a flat `items` list directly under each
+promotion) to mechanically mirror the frozen Promotion -> Group ->
+Membership target; it still does not attempt to mirror the real XML's
+exact tag names, and must never be read as the future real parser/XML DTO
+-- that remains a separate, not-yet-made design decision. `_online_occurrence`
+is unchanged: Online has no Group concept in the frozen target.
 
-T-G is the one exception: it inspects the already-real dataclasses in
-`promotion_contract.py` directly (no call to either entry point), so it
-runs today's actual code path and is expected to be GREEN, not RED -- see
-its docstring for why that is meaningful rather than vacuous.
+T-G is the one exception among the pre-existing tests: it inspects the
+already-real dataclasses in `promotion_contract.py` directly (no call to
+either entry point). Its original six assertions exercise already-existing
+production code and remain GREEN; the two new assertions it gains for
+SG-T01 (StandardGroupFacts, NormalizedPromotionGroup field-set pins) go RED
+via the local-import mechanism described above.
 
-T-Q..T-T (Phase 2, failure semantics) additionally wrap their call in
-`pytest.raises(ValueError)` rather than leaving it uncaught. `ValueError`
-is not a newly invented class: it is the exact convention `_require()`
-already establishes in `normalize/rami_levy.py` and `normalize/shufersal.py`
-for a required-field normalization-contract violation. `NotImplementedError`
-does not subclass `ValueError`, so right now `pytest.raises(ValueError)`
-does NOT catch the skeleton's `NotImplementedError` -- it still propagates
-uncaught and fails the test, for the identical attributable reason as every
-other behavioral test in this file. Once real failure semantics replace the
-stub, these tests become live without rewriting.
+T-Q..T-T (Phase 2, failure semantics) wrap their call in
+`pytest.raises(ValueError)` rather than leaving it uncaught, and do not
+unpack the return value at all -- they remain GREEN, unaffected by the
+return-arity change, since the underlying malformed-input `ValueError` they
+were already proving still fires before any return value would ever be
+constructed.
 """
 
 from __future__ import annotations
@@ -91,10 +109,10 @@ _ONLINE_STORE_ID = "039"
 
 _OMIT = object()
 """Sentinel: a test wants this key genuinely ABSENT from the built raw
-dict -- distinct from a present key whose value is "". Needed only for
-Phase 2's "required field is genuinely missing" fixtures (T-R/S/T); no
-Phase 1 fixture uses it, and its introduction changes no Phase 1 fixture's
-built dict. TEST-ONLY, never a production parser DTO concept.
+dict -- distinct from a present key whose value is "". Needed for Phase 2's
+"required field is genuinely missing" fixtures (T-R/S/T) and for SG-T05's
+genuinely-missing-GroupID fixture. TEST-ONLY, never a production parser DTO
+concept.
 """
 
 
@@ -108,17 +126,20 @@ def _standard_occurrence(
 
     `promotions` is a list of plain dicts, one per promotion. Each may
     supply any of the promotion-level keys (promotion_id, description,
-    start_at, end_at, is_gift_item) plus an "items" list of plain per-item
-    dicts (item_code, reward_type, discount_rate, discounted_price,
-    min_qty, min_no_of_item_offered, max_qty). Any key a caller omits
-    falls back to an inert empty-string default, so a call site only needs
-    to state the field(s) relevant to what it's testing. Passing `_OMIT`
-    (for chain_id/store_id, or as any promotion-/item-level field's value)
-    removes that key from the built dict entirely instead of defaulting
-    it, for fixtures that need genuine absence rather than "". Deliberately
-    does not attempt to mirror the observed Groups -> Group ->
-    PromotionItems XML nesting -- that remains a separate future design
-    decision.
+    start_at, end_at, is_gift_item, min_no_of_item_offered) plus a
+    "groups" list of plain per-group dicts (group_id, discount_type,
+    min_purchase_amount) each carrying its own "items" list of plain
+    per-item dicts (item_code, reward_type, discount_rate,
+    discounted_price, min_qty, max_qty). Any key a caller omits falls back
+    to an inert empty-string default, so a call site only needs to state
+    the field(s) relevant to what it's testing. Passing `_OMIT` (for
+    chain_id/store_id, or as any promotion-/group-/item-level field's
+    value) removes that key from the built dict entirely instead of
+    defaulting it, for fixtures that need genuine absence rather than "".
+
+    min_no_of_item_offered moved here (promotion level) from the former
+    per-item default, mirroring the frozen Group-preservation target's
+    real-evidence-verified source placement -- see SG-T09.
     """
     promotion_defaults = {
         "promotion_id": "",
@@ -126,6 +147,12 @@ def _standard_occurrence(
         "start_at": "",
         "end_at": "",
         "is_gift_item": "",
+        "min_no_of_item_offered": "",
+    }
+    group_defaults = {
+        "group_id": "",
+        "discount_type": "",
+        "min_purchase_amount": "",
     }
     item_defaults = {
         "item_code": "",
@@ -133,18 +160,29 @@ def _standard_occurrence(
         "discount_rate": "",
         "discounted_price": "",
         "min_qty": "",
-        "min_no_of_item_offered": "",
         "max_qty": "",
     }
     built_promotions = []
     for promo in promotions:
-        items = []
-        for item in promo.get("items", []):
-            merged_item = {**item_defaults, **item}
-            items.append({k: v for k, v in merged_item.items() if v is not _OMIT})
-        merged_promo = {**promotion_defaults, **{k: v for k, v in promo.items() if k != "items"}}
+        groups = []
+        for group in promo.get("groups", []):
+            items = []
+            for item in group.get("items", []):
+                merged_item = {**item_defaults, **item}
+                items.append({k: v for k, v in merged_item.items() if v is not _OMIT})
+            merged_group = {
+                **group_defaults,
+                **{k: v for k, v in group.items() if k != "items"},
+            }
+            built_group = {k: v for k, v in merged_group.items() if v is not _OMIT}
+            built_group["items"] = items
+            groups.append(built_group)
+        merged_promo = {
+            **promotion_defaults,
+            **{k: v for k, v in promo.items() if k != "groups"},
+        }
         built_promo = {k: v for k, v in merged_promo.items() if v is not _OMIT}
-        built_promo["items"] = items
+        built_promo["groups"] = groups
         built_promotions.append(built_promo)
     envelope: dict[str, object] = {"promotions": built_promotions}
     if chain_id is not _OMIT:
@@ -170,7 +208,8 @@ def _online_occurrence(
     per-item dicts (item_code, is_gift_item, item_type). Any key a caller
     omits falls back to an inert empty-string default. Passing `_OMIT` (see
     `_standard_occurrence`) removes that key entirely instead of defaulting
-    it.
+    it. Unchanged from before Group preservation: Online has no Group
+    concept in the frozen target.
     """
     promotion_defaults = {
         "promotion_id": "",
@@ -221,15 +260,19 @@ _STANDARD_MINIMAL_OCCURRENCE = _standard_occurrence(
             "start_at": "2026-08-02 00:00",
             "end_at": "2026-10-03 23:59",
             "is_gift_item": "0",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290121290494",
-                    "reward_type": "3",
-                    "discount_rate": "33",
-                    "discounted_price": "10.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290121290494",
+                            "reward_type": "3",
+                            "discount_rate": "33",
+                            "discounted_price": "10.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         }
@@ -238,9 +281,11 @@ _STANDARD_MINIMAL_OCCURRENCE = _standard_occurrence(
 
 
 def test_standard_happy_path_maps_minimal_occurrence_to_frozen_contract() -> None:
-    """T-A: one promotion, one membership, every frozen shared + Standard
-    family field populated -- eventual success, exact raw mapping."""
-    promotions, memberships = normalize_standard_promotions_occurrence(
+    """T-A: one promotion, one group, one membership, every frozen shared +
+    Standard family field populated -- eventual success, exact raw
+    mapping. min_no_of_item_offered_raw is asserted on StandardPromotionFacts
+    only (SG-T09's relocation), not on the membership."""
+    promotions, _groups, memberships = normalize_standard_promotions_occurrence(
         _STANDARD_MINIMAL_OCCURRENCE, collected_at=_COLLECTED_AT
     )
 
@@ -257,6 +302,7 @@ def test_standard_happy_path_maps_minimal_occurrence_to_frozen_contract() -> Non
     assert promo.collected_at == _COLLECTED_AT
     assert isinstance(promo.family_facts, StandardPromotionFacts)
     assert promo.family_facts.is_gift_item_raw == "0"
+    assert promo.family_facts.min_no_of_item_offered_raw == "1"
 
     assert len(memberships) == 1
     member = memberships[0]
@@ -268,7 +314,6 @@ def test_standard_happy_path_maps_minimal_occurrence_to_frozen_contract() -> Non
     assert member.family_facts.discount_rate_raw == "33"
     assert member.family_facts.discounted_price_raw == "10.00"
     assert member.family_facts.min_qty_raw == "1"
-    assert member.family_facts.min_no_of_item_offered_raw == "1"
     assert member.family_facts.max_qty_raw == "0"
 
 
@@ -305,7 +350,8 @@ _ONLINE_MINIMAL_OCCURRENCE = _online_occurrence(
 
 def test_online_happy_path_maps_minimal_occurrence_to_frozen_contract() -> None:
     """T-B: same pattern as T-A for the Online family, covering every
-    OnlinePromotionFacts and OnlineMembershipFacts field."""
+    OnlinePromotionFacts and OnlineMembershipFacts field. Unaffected by
+    Group preservation -- Online stays a 2-tuple."""
     promotions, memberships = normalize_online_promotions_occurrence(
         _ONLINE_MINIMAL_OCCURRENCE, collected_at=_COLLECTED_AT
     )
@@ -350,34 +396,36 @@ _STANDARD_ONE_PROMOTION_THREE_ITEMS = _standard_occurrence(
             "start_at": "2026-08-01",
             "end_at": "2026-09-01",
             "is_gift_item": "",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290016319187",
-                    "reward_type": "3",
-                    "discount_rate": "25",
-                    "discounted_price": "14.90",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
-                },
-                {
-                    "item_code": "7290016319194",
-                    "reward_type": "3",
-                    "discount_rate": "25",
-                    "discounted_price": "14.90",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
-                },
-                {
-                    "item_code": "7290016319200",
-                    "reward_type": "3",
-                    "discount_rate": "25",
-                    "discounted_price": "14.90",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
-                },
+                    "items": [
+                        {
+                            "item_code": "7290016319187",
+                            "reward_type": "3",
+                            "discount_rate": "25",
+                            "discounted_price": "14.90",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                        {
+                            "item_code": "7290016319194",
+                            "reward_type": "3",
+                            "discount_rate": "25",
+                            "discounted_price": "14.90",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                        {
+                            "item_code": "7290016319200",
+                            "reward_type": "3",
+                            "discount_rate": "25",
+                            "discounted_price": "14.90",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                }
             ],
         }
     ],
@@ -388,7 +436,7 @@ def test_one_promotion_with_three_skus_yields_one_promotion_and_three_membership
     """T-C: one occurrence, one promotion, three distinct participating
     SKUs -- one NormalizedPromotion, three NormalizedPromotionMembership,
     all linked to the same promotion_id_raw."""
-    promotions, memberships = normalize_standard_promotions_occurrence(
+    promotions, _groups, memberships = normalize_standard_promotions_occurrence(
         _STANDARD_ONE_PROMOTION_THREE_ITEMS, collected_at=_COLLECTED_AT
     )
 
@@ -416,15 +464,19 @@ _STANDARD_SAME_SKU_TWO_PROMOTIONS = _standard_occurrence(
             "start_at": "2026-08-01",
             "end_at": "2026-08-31",
             "is_gift_item": "",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290014066373",
-                    "reward_type": "1",
-                    "discount_rate": "100",
-                    "discounted_price": "0.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290014066373",
+                            "reward_type": "1",
+                            "discount_rate": "100",
+                            "discounted_price": "0.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         },
@@ -434,15 +486,19 @@ _STANDARD_SAME_SKU_TWO_PROMOTIONS = _standard_occurrence(
             "start_at": "2026-09-01",
             "end_at": "2026-09-30",
             "is_gift_item": "",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290014066373",
-                    "reward_type": "3",
-                    "discount_rate": "15",
-                    "discounted_price": "12.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290014066373",
+                            "reward_type": "3",
+                            "discount_rate": "15",
+                            "discounted_price": "12.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         },
@@ -454,7 +510,7 @@ def test_same_sku_across_two_promotions_yields_two_distinct_memberships() -> Non
     """T-D: one occurrence, two promotions, the same retailer_item_id_raw
     appears under both -- two distinct memberships, same SKU identity,
     different promotion IDs, no accidental dedup/merge."""
-    promotions, memberships = normalize_standard_promotions_occurrence(
+    promotions, _groups, memberships = normalize_standard_promotions_occurrence(
         _STANDARD_SAME_SKU_TWO_PROMOTIONS, collected_at=_COLLECTED_AT
     )
 
@@ -475,19 +531,20 @@ def test_same_sku_across_two_promotions_yields_two_distinct_memberships() -> Non
 
 
 def test_standard_economics_land_on_membership_not_promotion_or_shared_envelope() -> None:
-    """T-E: Standard economic fields (RewardType, DiscountRate,
-    DiscountedPrice, MinQty, MinNoOfItemOffered, MaxQty) must normalize
-    into StandardMembershipFacts -- never onto StandardPromotionFacts or
-    the shared NormalizedPromotion envelope."""
-    promotions, memberships = normalize_standard_promotions_occurrence(
+    """T-E: Standard item-level economic fields (RewardType, DiscountRate,
+    DiscountedPrice, MinQty, MaxQty) must normalize into
+    StandardMembershipFacts -- never onto StandardPromotionFacts or the
+    shared NormalizedPromotion envelope. MinNoOfItemOffered is deliberately
+    NOT in that list: per SG-T09, it is promotion-level, asserted there."""
+    promotions, _groups, memberships = normalize_standard_promotions_occurrence(
         _STANDARD_MINIMAL_OCCURRENCE, collected_at=_COLLECTED_AT
     )
 
     promo = promotions[0]
     assert isinstance(promo.family_facts, StandardPromotionFacts)
-    # StandardPromotionFacts' only declared field is is_gift_item_raw --
-    # this is a positive assertion on the actual value landing there, not
-    # a shape re-check (that's T-G's job).
+    # StandardPromotionFacts' only declared fields are is_gift_item_raw and
+    # min_no_of_item_offered_raw -- this is a positive assertion on the
+    # actual value landing there, not a shape re-check (that's T-G's job).
     assert promo.family_facts.is_gift_item_raw == "0"
 
     member = memberships[0]
@@ -496,7 +553,6 @@ def test_standard_economics_land_on_membership_not_promotion_or_shared_envelope(
     assert member.family_facts.discount_rate_raw == "33"
     assert member.family_facts.discounted_price_raw == "10.00"
     assert member.family_facts.min_qty_raw == "1"
-    assert member.family_facts.min_no_of_item_offered_raw == "1"
     assert member.family_facts.max_qty_raw == "0"
 
 
@@ -532,23 +588,29 @@ def test_online_economics_land_on_promotion_not_membership_or_shared_envelope() 
 
 
 # ---------------------------------------------------------------------------
-# T-G -- exact positive contract shape / family isolation
+# T-G / SG-T01 -- exact positive contract shape / family isolation
 # ---------------------------------------------------------------------------
 
 
 def test_frozen_contract_shape_is_a_closed_positive_enumeration() -> None:
-    """T-G: assert the frozen contract's exact field sets directly against
-    the real dataclasses -- a closed positive enumeration, not a blacklist
-    of forbidden field names. Absorbs the former T-V intent.
+    """T-G / SG-T01: assert the frozen contract's exact field sets directly
+    against the real dataclasses -- a closed positive enumeration, not a
+    blacklist of forbidden field names. Absorbs the former T-V intent.
 
-    This test does not call either normalize entry point, so it is NOT
-    subject to the skeleton's NotImplementedError -- it exercises real,
-    already-existing production code (the dataclass definitions
-    themselves) and is expected to be GREEN today. It remains meaningful
-    (not vacuous) because it pins the exact field set now, so any future
-    accidental field addition/removal/rename on these six types -- in
-    either direction -- fails this test immediately, before any behavioral
+    This test does not call either normalize entry point, so its original
+    six assertions are NOT subject to any skeleton/arity issue -- they
+    exercise real, already-existing production code (the dataclass
+    definitions themselves) and remain GREEN. It remains meaningful (not
+    vacuous) because it pins the exact field set now, so any future
+    accidental field addition/removal/rename on these types -- in either
+    direction -- fails this test immediately, before any behavioral
     implementation exists to hide the drift.
+
+    The two new SG-T01 assertions (StandardGroupFacts,
+    NormalizedPromotionGroup) import those two names LOCALLY, inside this
+    function, because neither exists in production yet -- a module-level
+    import would fail collection for the entire file (see module
+    docstring). Those two assertions are the ones expected to go RED here.
     """
     assert {f.name for f in dataclasses.fields(NormalizedPromotion)} == {
         "promotion_id_raw",
@@ -565,9 +627,11 @@ def test_frozen_contract_shape_is_a_closed_positive_enumeration() -> None:
         "promotion_id_raw",
         "retailer_item_id_raw",
         "family_facts",
+        "group_index",
     }
     assert {f.name for f in dataclasses.fields(StandardPromotionFacts)} == {
         "is_gift_item_raw",
+        "min_no_of_item_offered_raw",
     }
     assert {f.name for f in dataclasses.fields(OnlinePromotionFacts)} == {
         "reward_type_raw",
@@ -584,12 +648,27 @@ def test_frozen_contract_shape_is_a_closed_positive_enumeration() -> None:
         "discount_rate_raw",
         "discounted_price_raw",
         "min_qty_raw",
-        "min_no_of_item_offered_raw",
         "max_qty_raw",
     }
     assert {f.name for f in dataclasses.fields(OnlineMembershipFacts)} == {
         "is_gift_item_raw",
         "item_type_raw",
+    }
+
+    from smartcart.normalize.promotion_contract import (
+        NormalizedPromotionGroup,
+        StandardGroupFacts,
+    )
+
+    assert {f.name for f in dataclasses.fields(StandardGroupFacts)} == {
+        "group_id_raw",
+        "discount_type_raw",
+        "min_purchase_amount_raw",
+    }
+    assert {f.name for f in dataclasses.fields(NormalizedPromotionGroup)} == {
+        "promotion_id_raw",
+        "group_index",
+        "family_facts",
     }
 
 
@@ -607,15 +686,19 @@ _STANDARD_NON_BOOLEAN_GIFT_FLAG_OCCURRENCE = _standard_occurrence(
             # Real observed shape: Shufersal's IsGiftItem was seen as a
             # non-boolean value ("1.5") in prior recon, not just "0"/"1".
             "is_gift_item": "1.5",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "8006530264495",
-                    "reward_type": "2",
-                    "discount_rate": "100",
-                    "discounted_price": "0.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "8006530264495",
+                            "reward_type": "2",
+                            "discount_rate": "100",
+                            "discounted_price": "0.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         }
@@ -627,7 +710,7 @@ def test_standard_non_boolean_is_gift_item_is_preserved_raw_without_bool_coercio
     """T-H: a non-boolean IsGiftItem source value ("1.5") must survive
     exactly as a string on StandardPromotionFacts -- never coerced to
     True/False, never rejected as invalid."""
-    promotions, _memberships = normalize_standard_promotions_occurrence(
+    promotions, _groups, _memberships = normalize_standard_promotions_occurrence(
         _STANDARD_NON_BOOLEAN_GIFT_FLAG_OCCURRENCE, collected_at=_COLLECTED_AT
     )
 
@@ -683,10 +766,10 @@ def test_online_is_gift_item_is_preserved_raw_at_membership_level() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T-J -- MinQty and MinNoOfItemOffered stay independent
+# SG-T09 (supersedes former T-J) -- MinNoOfItemOffered relocation
 # ---------------------------------------------------------------------------
 
-_STANDARD_DIVERGENT_QTY_FIELDS_OCCURRENCE = _standard_occurrence(
+_STANDARD_PROMOTION_LEVEL_MIN_NO_OF_ITEM_OFFERED_OCCURRENCE = _standard_occurrence(
     promotions=[
         {
             "promotion_id": "0001379851",
@@ -694,17 +777,22 @@ _STANDARD_DIVERGENT_QTY_FIELDS_OCCURRENCE = _standard_occurrence(
             "start_at": "2026-08-01",
             "end_at": "2026-08-31",
             "is_gift_item": "",
-            "items": [
+            # Real observed placement (see prior recon): MinNoOfItemOffered
+            # is a Promotion-level field in real Standard XML, not
+            # PromotionItem-level.
+            "min_no_of_item_offered": "10",
+            "groups": [
                 {
-                    "item_code": "7290002680178",
-                    "reward_type": "3",
-                    "discount_rate": "34.75",
-                    "discounted_price": "16.90",
-                    # Real observed divergence from prior recon: MinQty=1
-                    # while MinNoOfItemOffered=10 on the same record.
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "10",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290002680178",
+                            "reward_type": "3",
+                            "discount_rate": "34.75",
+                            "discounted_price": "16.90",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         }
@@ -712,19 +800,26 @@ _STANDARD_DIVERGENT_QTY_FIELDS_OCCURRENCE = _standard_occurrence(
 )
 
 
-def test_min_qty_and_min_no_of_item_offered_survive_independently() -> None:
-    """T-J: distinct source values for MinQty and MinNoOfItemOffered must
-    both survive independently on StandardMembershipFacts -- never
-    merged/collapsed into one, even though they sound related."""
-    _promotions, memberships = normalize_standard_promotions_occurrence(
-        _STANDARD_DIVERGENT_QTY_FIELDS_OCCURRENCE, collected_at=_COLLECTED_AT
+def test_sg_t09_min_no_of_item_offered_lands_on_promotion_not_membership() -> None:
+    """SG-T09 (supersedes former T-J, whose premise -- comparing MinQty and
+    MinNoOfItemOffered as two independent membership-level fields -- no
+    longer holds once MinNoOfItemOffered relocates to Promotion level): the
+    real, evidence-verified source placement of MinNoOfItemOffered is
+    Promotion-level, not PromotionItem-level. It must land on
+    StandardPromotionFacts.min_no_of_item_offered_raw,
+    StandardMembershipFacts must no longer carry any such field at all, and
+    the value must not be duplicated onto any membership."""
+    promotions, _groups, memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_PROMOTION_LEVEL_MIN_NO_OF_ITEM_OFFERED_OCCURRENCE, collected_at=_COLLECTED_AT
     )
+
+    promo = promotions[0]
+    assert promo.family_facts.min_no_of_item_offered_raw == "10"
 
     member = memberships[0]
     assert isinstance(member.family_facts, StandardMembershipFacts)
+    assert not hasattr(member.family_facts, "min_no_of_item_offered_raw")
     assert member.family_facts.min_qty_raw == "1"
-    assert member.family_facts.min_no_of_item_offered_raw == "10"
-    assert member.family_facts.min_qty_raw != member.family_facts.min_no_of_item_offered_raw
 
 
 # ---------------------------------------------------------------------------
@@ -782,16 +877,20 @@ _STANDARD_UNKNOWN_REWARD_TYPE_OCCURRENCE = _standard_occurrence(
             "start_at": "2026-08-01",
             "end_at": "2026-08-31",
             "is_gift_item": "",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290099999999",
-                    # Unrecognized/never-before-observed RewardType value.
-                    "reward_type": "99",
-                    "discount_rate": "10",
-                    "discounted_price": "9.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290099999999",
+                            # Unrecognized/never-before-observed RewardType value.
+                            "reward_type": "99",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         }
@@ -803,7 +902,7 @@ def test_unknown_reward_type_normalizes_as_valid_opaque_data() -> None:
     """T-L: an unrecognized RewardType value ("99") must normalize
     successfully and round-trip unchanged -- unknown semantic meaning must
     NOT itself be modeled as malformed/rejected data."""
-    _promotions, memberships = normalize_standard_promotions_occurrence(
+    _promotions, _groups, memberships = normalize_standard_promotions_occurrence(
         _STANDARD_UNKNOWN_REWARD_TYPE_OCCURRENCE, collected_at=_COLLECTED_AT
     )
 
@@ -863,7 +962,7 @@ def test_membership_normalizes_without_any_pricefull_input_or_dependency() -> No
     """T-N: promotion normalization is independent of same-store PriceFull
     presence -- proved structurally (no PriceFull import anywhere in this
     file), not by inspecting internal calls."""
-    promotions, memberships = normalize_standard_promotions_occurrence(
+    promotions, _groups, memberships = normalize_standard_promotions_occurrence(
         _STANDARD_MINIMAL_OCCURRENCE, collected_at=_COLLECTED_AT
     )
 
@@ -880,7 +979,7 @@ def test_every_normalized_promotion_carries_the_exact_caller_supplied_collected_
     """T-O: a distinctive timezone-aware collected_at must appear,
     unmodified, on every NormalizedPromotion produced from the occurrence
     -- no regeneration, truncation, or timezone normalization."""
-    promotions, _memberships = normalize_standard_promotions_occurrence(
+    promotions, _groups, _memberships = normalize_standard_promotions_occurrence(
         _STANDARD_SAME_SKU_TWO_PROMOTIONS, collected_at=_DISTINCTIVE_COLLECTED_AT
     )
 
@@ -912,7 +1011,7 @@ def test_every_normalized_promotion_carries_the_same_occurrence_scope_facts() ->
     sufficient, consistent source/scope facts across every
     NormalizedPromotion produced from one occurrence -- not just the first
     one, not defaulted or varied per-promotion."""
-    promotions, _memberships = normalize_standard_promotions_occurrence(
+    promotions, _groups, _memberships = normalize_standard_promotions_occurrence(
         _STANDARD_SAME_SKU_TWO_PROMOTIONS, collected_at=_COLLECTED_AT
     )
 
@@ -921,6 +1020,578 @@ def test_every_normalized_promotion_carries_the_same_occurrence_scope_facts() ->
         assert promo.retailer_chain_id == _STANDARD_CHAIN_ID
         assert promo.store_id_raw == _STANDARD_STORE_ID
         assert promo.source_family == "standard"
+
+
+# ===========================================================================
+# GROUP PRESERVATION -- SG-T02..SG-T08, SG-T10, SG-T11
+# (SG-T01 is T-G above; SG-T09 supersedes former T-J above)
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# SG-T02 -- single Standard Group
+# ---------------------------------------------------------------------------
+
+_STANDARD_ONE_GROUP_TWO_ITEMS_OCCURRENCE = _standard_occurrence(
+    promotions=[
+        {
+            "promotion_id": "0001417100",
+            "description": "מארז שתיה",
+            "start_at": "2026-08-01",
+            "end_at": "2026-08-31",
+            "is_gift_item": "",
+            "min_no_of_item_offered": "0",
+            "groups": [
+                {
+                    "group_id": "1",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "7290020000001",
+                            "reward_type": "10",
+                            "discount_rate": "",
+                            "discounted_price": "10.00",
+                            "min_qty": "2",
+                            "max_qty": "0",
+                        },
+                        {
+                            "item_code": "7290020000002",
+                            "reward_type": "10",
+                            "discount_rate": "",
+                            "discounted_price": "10.00",
+                            "min_qty": "2",
+                            "max_qty": "0",
+                        },
+                    ],
+                }
+            ],
+        }
+    ],
+)
+
+
+def test_sg_t02_single_standard_group_yields_one_group_and_two_memberships() -> None:
+    """SG-T02: one Promotion, one Group, two items -- one NormalizedPromotion,
+    one NormalizedPromotionGroup at group_index 0, two
+    NormalizedPromotionMembership records both linked to that same
+    group_index, all sharing the same promotion_id_raw. Raw Group facts
+    (GroupID, DiscountType, MinPurchaseAmount) preserved exactly."""
+    from smartcart.normalize.promotion_contract import (
+        NormalizedPromotionGroup,
+        StandardGroupFacts,
+    )
+
+    promotions, groups, memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_ONE_GROUP_TWO_ITEMS_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    assert len(promotions) == 1
+    assert promotions[0].promotion_id_raw == "0001417100"
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert isinstance(group, NormalizedPromotionGroup)
+    assert group.promotion_id_raw == "0001417100"
+    assert group.group_index == 0
+    assert isinstance(group.family_facts, StandardGroupFacts)
+    assert group.family_facts.group_id_raw == "1"
+    assert group.family_facts.discount_type_raw == "0"
+    assert group.family_facts.min_purchase_amount_raw == "0.00"
+
+    assert len(memberships) == 2
+    assert {m.retailer_item_id_raw for m in memberships} == {
+        "7290020000001",
+        "7290020000002",
+    }
+    for member in memberships:
+        assert member.promotion_id_raw == "0001417100"
+        assert member.group_index == 0
+
+
+# ---------------------------------------------------------------------------
+# SG-T03 -- Carrefour structural counterexample
+# ---------------------------------------------------------------------------
+
+# STRUCTURAL EVIDENCE-DERIVED FIXTURE.
+# The two-Group structure and [3,1] partition derive from the real Carrefour
+# PromotionID 0011248601 observation.
+# The ItemCode values below are test placeholders and are NOT transcribed
+# retailer source values.
+_STANDARD_CARREFOUR_TWO_GROUP_DISJOINT_OCCURRENCE = _standard_occurrence(
+    promotions=[
+        {
+            "promotion_id": "0011248601",
+            "description": "מוצרי סויה וטופו",
+            "start_at": "2026-08-01",
+            "end_at": "2026-08-31",
+            "is_gift_item": "",
+            "min_no_of_item_offered": "0",
+            "groups": [
+                {
+                    "group_id": "1",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9000000000001",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                        {
+                            "item_code": "9000000000002",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                        {
+                            "item_code": "9000000000003",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+                {
+                    "group_id": "2",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9000000000004",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+)
+
+
+def test_sg_t03_carrefour_two_group_disjoint_item_sets_remain_distinct() -> None:
+    """SG-T03: real Carrefour structural counterexample (see fixture
+    comment for exact evidence provenance) -- one PromotionID with two
+    Groups carrying disjoint item sets must normalize into two distinct
+    NormalizedPromotionGroup records at group_index 0 and 1, with each
+    group's memberships remaining attached to their own source Group --
+    never merged/collapsed into one."""
+    _promotions, groups, memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_CARREFOUR_TWO_GROUP_DISJOINT_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    assert len(groups) == 2
+    assert [g.group_index for g in groups] == [0, 1]
+
+    by_group_index = {
+        0: {m.retailer_item_id_raw for m in memberships if m.group_index == 0},
+        1: {m.retailer_item_id_raw for m in memberships if m.group_index == 1},
+    }
+    assert by_group_index[0] == {
+        "9000000000001",
+        "9000000000002",
+        "9000000000003",
+    }
+    assert by_group_index[1] == {"9000000000004"}
+    assert by_group_index[0].isdisjoint(by_group_index[1])
+
+
+# ---------------------------------------------------------------------------
+# SG-T04 -- duplicate GroupID
+# ---------------------------------------------------------------------------
+
+_STANDARD_DUPLICATE_GROUP_ID_OCCURRENCE = _standard_occurrence(
+    promotions=[
+        {
+            "promotion_id": "0001417200",
+            "description": "שתי קבוצות עם אותו מזהה",
+            "start_at": "2026-08-01",
+            "end_at": "2026-08-31",
+            "is_gift_item": "",
+            "min_no_of_item_offered": "0",
+            "groups": [
+                {
+                    "group_id": "1",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9100000000001",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+                {
+                    # Deliberate mutation: same group_id as the first Group,
+                    # to prove raw GroupID is not treated as structural
+                    # identity.
+                    "group_id": "1",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9100000000002",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+)
+
+
+def test_sg_t04_duplicate_raw_group_id_still_yields_two_distinct_groups() -> None:
+    """SG-T04: two Groups under one Promotion sharing the same raw
+    group_id_raw ("1") must still normalize into two structurally distinct
+    NormalizedPromotionGroup records at group_index 0 and 1 -- proving raw
+    GroupID is not used as structural identity; group_index is."""
+    _promotions, groups, memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_DUPLICATE_GROUP_ID_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    assert len(groups) == 2
+    assert [g.group_index for g in groups] == [0, 1]
+    assert groups[0].family_facts.group_id_raw == "1"
+    assert groups[1].family_facts.group_id_raw == "1"
+
+    by_group_index = {m.group_index: m.retailer_item_id_raw for m in memberships}
+    assert by_group_index[0] == "9100000000001"
+    assert by_group_index[1] == "9100000000002"
+
+
+# ---------------------------------------------------------------------------
+# SG-T05 -- missing/empty GroupID
+# ---------------------------------------------------------------------------
+
+_STANDARD_MISSING_GROUP_ID_OCCURRENCE = _standard_occurrence(
+    promotions=[
+        {
+            "promotion_id": "0001417300",
+            "description": "קבוצה ללא מזהה",
+            "start_at": "2026-08-01",
+            "end_at": "2026-08-31",
+            "is_gift_item": "",
+            "min_no_of_item_offered": "0",
+            "groups": [
+                {
+                    # group_id genuinely absent from source (not merely an
+                    # empty string) -- matches this file's existing _OMIT
+                    # convention for "field genuinely missing".
+                    "group_id": _OMIT,
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9200000000001",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+                {
+                    "group_id": "2",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9200000000002",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+)
+
+
+def test_sg_t05_missing_group_id_does_not_prevent_structural_distinction() -> None:
+    """SG-T05: a Group with a genuinely absent raw GroupID must remain
+    structurally distinct from its sibling Group -- group_index supplies
+    structural linkage independently of GroupID; no identifier is invented
+    for the missing value (it stays None, the same raw-absence convention
+    used elsewhere in this file), and no validation rule rejects it."""
+    _promotions, groups, memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_MISSING_GROUP_ID_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    assert len(groups) == 2
+    assert [g.group_index for g in groups] == [0, 1]
+    assert groups[0].family_facts.group_id_raw is None
+    assert groups[1].family_facts.group_id_raw == "2"
+
+    by_group_index = {m.group_index: m.retailer_item_id_raw for m in memberships}
+    assert by_group_index[0] == "9200000000001"
+    assert by_group_index[1] == "9200000000002"
+
+
+# ---------------------------------------------------------------------------
+# SG-T06 -- Group facts remain opaque
+# ---------------------------------------------------------------------------
+
+_STANDARD_GROUP_FACTS_OPAQUE_OCCURRENCE = _standard_occurrence(
+    promotions=[
+        {
+            "promotion_id": "0001417400",
+            "description": "קבוצה עם ערכים גולמיים",
+            "start_at": "2026-08-01",
+            "end_at": "2026-08-31",
+            "is_gift_item": "",
+            "min_no_of_item_offered": "0",
+            "groups": [
+                {
+                    "group_id": "1",
+                    # Unrecognized/never-before-observed DiscountType value
+                    # -- same "unknown value is valid opaque data"
+                    # principle as T-L/T-M, applied to Group-level
+                    # DiscountType.
+                    "discount_type": "9",
+                    "min_purchase_amount": "150.00",
+                    "items": [
+                        {
+                            "item_code": "9300000000001",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+)
+
+
+def test_sg_t06_group_facts_are_preserved_as_opaque_raw_strings() -> None:
+    """SG-T06: GroupID, DiscountType, and MinPurchaseAmount must survive
+    exactly as raw strings on StandardGroupFacts -- no enum interpretation,
+    no economic interpretation, no semantic coercion, and an unrecognized
+    DiscountType value ("9") normalizes successfully like any other opaque
+    code (same principle as T-L/T-M)."""
+    _promotions, groups, _memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_GROUP_FACTS_OPAQUE_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    group = groups[0]
+    assert group.family_facts.group_id_raw == "1"
+    assert group.family_facts.discount_type_raw == "9"
+    assert group.family_facts.min_purchase_amount_raw == "150.00"
+    assert isinstance(group.family_facts.group_id_raw, str)
+    assert isinstance(group.family_facts.discount_type_raw, str)
+    assert isinstance(group.family_facts.min_purchase_amount_raw, str)
+
+
+# ---------------------------------------------------------------------------
+# SG-T07 -- Group order preserved
+# ---------------------------------------------------------------------------
+
+_STANDARD_GROUP_ORDER_B_THEN_A_OCCURRENCE = _standard_occurrence(
+    promotions=[
+        {
+            "promotion_id": "0001417500",
+            "description": "סדר קבוצות",
+            "start_at": "2026-08-01",
+            "end_at": "2026-08-31",
+            "is_gift_item": "",
+            "min_no_of_item_offered": "0",
+            "groups": [
+                {
+                    "group_id": "B",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9400000000001",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+                {
+                    "group_id": "A",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9400000000002",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+)
+
+
+def test_sg_t07_group_output_order_matches_source_order() -> None:
+    """SG-T07: Groups deliberately supplied in source order B, A must be
+    emitted in that same observable order -- group_index [0, 1] tracking
+    B then A, not sorted, deduplicated, or reordered by any other key.
+    Only observable output order is asserted here, not implementation
+    technique."""
+    _promotions, groups, _memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_GROUP_ORDER_B_THEN_A_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    assert [g.family_facts.group_id_raw for g in groups] == ["B", "A"]
+    assert [g.group_index for g in groups] == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# SG-T08 -- membership order preserved
+# ---------------------------------------------------------------------------
+
+_STANDARD_MEMBERSHIP_ORDER_C_A_B_OCCURRENCE = _standard_occurrence(
+    promotions=[
+        {
+            "promotion_id": "0001417600",
+            "description": "סדר פריטים",
+            "start_at": "2026-08-01",
+            "end_at": "2026-08-31",
+            "is_gift_item": "",
+            "min_no_of_item_offered": "0",
+            "groups": [
+                {
+                    "group_id": "1",
+                    "discount_type": "0",
+                    "min_purchase_amount": "0.00",
+                    "items": [
+                        {
+                            "item_code": "9500000000003",  # C
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                        {
+                            "item_code": "9500000000001",  # A
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                        {
+                            "item_code": "9500000000002",  # B
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+)
+
+
+def test_sg_t08_membership_output_order_matches_source_item_order() -> None:
+    """SG-T08: items deliberately supplied in source order C, A, B within
+    one Group must be emitted as memberships in that same observable order
+    -- not sorted or reordered by ItemCode. No item_index is introduced
+    (see T-G/SG-T01's closed field-set pin); all three memberships share
+    the same group_index."""
+    _promotions, groups, memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_MEMBERSHIP_ORDER_C_A_B_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    assert [m.retailer_item_id_raw for m in memberships] == [
+        "9500000000003",  # C
+        "9500000000001",  # A
+        "9500000000002",  # B
+    ]
+    assert {m.group_index for m in memberships} == {groups[0].group_index}
+
+
+# ---------------------------------------------------------------------------
+# SG-T10 -- item-level economics regression
+# ---------------------------------------------------------------------------
+
+
+def test_sg_t10_group_preservation_does_not_move_item_level_economics() -> None:
+    """SG-T10: introducing Group preservation must not move or alter
+    reward_type_raw, min_qty_raw, max_qty_raw, discount_rate_raw, or
+    discounted_price_raw -- they remain on StandardMembershipFacts exactly
+    as raw input, unaffected by the surrounding Group structure. Reuses
+    SG-T02's fixture rather than inventing a redundant one."""
+    _promotions, _groups, memberships = normalize_standard_promotions_occurrence(
+        _STANDARD_ONE_GROUP_TWO_ITEMS_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    member = next(m for m in memberships if m.retailer_item_id_raw == "7290020000001")
+    assert isinstance(member.family_facts, StandardMembershipFacts)
+    assert member.family_facts.reward_type_raw == "10"
+    assert member.family_facts.min_qty_raw == "2"
+    assert member.family_facts.max_qty_raw == "0"
+    assert member.family_facts.discount_rate_raw == ""
+    assert member.family_facts.discounted_price_raw == "10.00"
+
+
+# ---------------------------------------------------------------------------
+# SG-T11 -- Online unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_sg_t11_online_normalization_stays_a_two_tuple_with_null_group_index() -> None:
+    """SG-T11: Online normalization is unaffected by Standard's Group
+    preservation -- it remains a plain 2-tuple (promotions, memberships),
+    with no Group collection introduced, and every OnlineMembershipFacts
+    membership now carries group_index=None (Online never had Groups to
+    begin with). OnlinePromotionFacts/OnlineMembershipFacts' field sets
+    and existing economics expectations (T-F) are otherwise unchanged."""
+    promotions, memberships = normalize_online_promotions_occurrence(
+        _ONLINE_MINIMAL_OCCURRENCE, collected_at=_COLLECTED_AT
+    )
+
+    assert len(promotions) == 1
+    assert len(memberships) == 1
+    member = memberships[0]
+    assert member.group_index is None
+
+    promo = promotions[0]
+    assert isinstance(promo.family_facts, OnlinePromotionFacts)
+    assert promo.family_facts.reward_type_raw == "1"
+    assert promo.family_facts.discounted_price_raw == "19.90"
 
 
 # ===========================================================================
@@ -938,7 +1609,9 @@ def test_malformed_raw_artifact_fails_the_whole_occurrence_call() -> None:
     occurrence-shaped object at all -- must fail the whole normalization
     call, with no normalized promotion or membership batch ever produced.
     Uses the smallest obviously invalid input rather than freezing a
-    detailed parser schema for "malformed"."""
+    detailed parser schema for "malformed". Unaffected by the return-arity
+    change: the ValueError fires before any return value would ever be
+    constructed."""
     with pytest.raises(ValueError):
         normalize_standard_promotions_occurrence(None, collected_at=_COLLECTED_AT)
 
@@ -956,15 +1629,19 @@ _STANDARD_MISSING_STORE_ID_OCCURRENCE = _standard_occurrence(
             "start_at": "2026-08-01",
             "end_at": "2026-08-31",
             "is_gift_item": "0",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290000000001",
-                    "reward_type": "3",
-                    "discount_rate": "10",
-                    "discounted_price": "9.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290000000001",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         }
@@ -979,7 +1656,7 @@ def test_missing_required_occurrence_store_id_fails_the_whole_occurrence_call() 
     Deliberately NOT expressed as a successful NormalizedPromotion carrying
     store_id_raw=None: the approved contract's store_id_raw: str is
     non-nullable, so that state can only ever be a call failure, never a
-    successful return value."""
+    successful return value. Unaffected by the return-arity change."""
     with pytest.raises(ValueError):
         normalize_standard_promotions_occurrence(
             _STANDARD_MISSING_STORE_ID_OCCURRENCE, collected_at=_COLLECTED_AT
@@ -998,15 +1675,19 @@ _STANDARD_ONE_VALID_ONE_MALFORMED_PROMOTION_OCCURRENCE = _standard_occurrence(
             "start_at": "2026-08-01",
             "end_at": "2026-08-31",
             "is_gift_item": "0",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290000000002",
-                    "reward_type": "3",
-                    "discount_rate": "10",
-                    "discounted_price": "9.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290000000002",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         },
@@ -1017,15 +1698,19 @@ _STANDARD_ONE_VALID_ONE_MALFORMED_PROMOTION_OCCURRENCE = _standard_occurrence(
             "start_at": "2026-08-01",
             "end_at": "2026-08-31",
             "is_gift_item": "0",
-            "items": [
+            "min_no_of_item_offered": "1",
+            "groups": [
                 {
-                    "item_code": "7290000000003",
-                    "reward_type": "3",
-                    "discount_rate": "10",
-                    "discounted_price": "9.00",
-                    "min_qty": "1",
-                    "min_no_of_item_offered": "1",
-                    "max_qty": "0",
+                    "items": [
+                        {
+                            "item_code": "7290000000003",
+                            "reward_type": "3",
+                            "discount_rate": "10",
+                            "discounted_price": "9.00",
+                            "min_qty": "1",
+                            "max_qty": "0",
+                        }
+                    ],
                 }
             ],
         },
@@ -1038,7 +1723,8 @@ def test_one_malformed_promotion_among_valid_promotions_fails_the_whole_occurren
     malformed one (PromotionID genuinely absent) -- the direct regression
     test for "499 valid + 1 malformed => zero accepted output", scaled
     down to 1+1. The whole call must fail; the otherwise-valid promotion
-    must never be returned as a partial success."""
+    must never be returned as a partial success. Unaffected by the
+    return-arity change."""
     with pytest.raises(ValueError):
         normalize_standard_promotions_occurrence(
             _STANDARD_ONE_VALID_ONE_MALFORMED_PROMOTION_OCCURRENCE, collected_at=_COLLECTED_AT
@@ -1099,17 +1785,19 @@ def test_one_malformed_membership_among_valid_memberships_fails_the_whole_occurr
 #
 # The public boundary is exactly: normalize_*_promotions_occurrence(raw,
 # *, collected_at) either returns the complete
-# tuple[list[NormalizedPromotion], list[NormalizedPromotionMembership]] or
-# raises. There is no other externally observable channel (no output
-# parameter, no streaming/partial-yield API, no exposed intermediate
-# state) through which a "partial result" could even be inspected -- a
-# raise prevents any tuple from ever being constructed or unpacked, for
-# ANY co-occurring valid+malformed combination, not just the promotion-
-# level (T-S) and membership-level (T-T) cases already covered. Any
-# further "malformed X alongside valid Y" fixture would produce a test
-# structurally identical to T-S/T-T (call + pytest.raises(ValueError)),
-# proving nothing beyond what they already establish. Writing it anyway
-# would be inventing a new requirement merely to preserve the test count,
-# which was explicitly out of scope for this task -- so T-U is reported
-# as redundant instead of written.
+# tuple[list[NormalizedPromotion], list[NormalizedPromotionMembership]] (or,
+# for Standard, the frozen 3-tuple once implemented) or raises. There is no
+# other externally observable channel (no output parameter, no
+# streaming/partial-yield API, no exposed intermediate state) through which
+# a "partial result" could even be inspected -- a raise prevents any tuple
+# from ever being constructed or unpacked, for ANY co-occurring
+# valid+malformed combination, not just the promotion-level (T-S) and
+# membership-level (T-T) cases already covered. Any further "malformed X
+# alongside valid Y" fixture would produce a test structurally identical to
+# T-S/T-T (call + pytest.raises(ValueError)), proving nothing beyond what
+# they already establish. Writing it anyway would be inventing a new
+# requirement merely to preserve the test count, which was explicitly out
+# of scope for this task -- so T-U is reported as redundant instead of
+# written. This reasoning is unaffected by Group preservation: no new
+# externally observable partial-result channel was introduced.
 # ---------------------------------------------------------------------------
