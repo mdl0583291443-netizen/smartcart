@@ -51,6 +51,29 @@ class RamiLevyStoreRaw:
 
 
 @dataclass(frozen=True)
+class StoresAnalysis:
+    """Structural observation carrier for one parsed Rami Levy Stores
+    document (T2/T9 observability contract), returned by
+    analyze_stores_xml().
+
+    `classification` records the Stores structural state
+    analyze_stores_xml() determined for the document (e.g.
+    RECOGNIZED_EMPTY, RECOGNIZED_NONEMPTY, NONEMPTY_UNRECOGNIZED,
+    UNKNOWN_UNCLASSIFIED -- see analyze_stores_xml()'s own docstring for
+    the exact classification order). `unsupported_structure_count` records
+    how many evidence-backed unsupported structural elements were observed
+    in the document; zero is a valid, meaningful count when none were
+    observed, not an unset/placeholder value. `records` is exactly what
+    parse_stores_xml() returns -- one RamiLevyStoreRaw per recognized
+    <Store> element.
+    """
+
+    records: list[RamiLevyStoreRaw]
+    classification: str | None = None
+    unsupported_structure_count: int = 0
+
+
+@dataclass(frozen=True)
 class RamiLevyPriceItemRawStandard:
     """One <Item> record from a "standard"-schema Rami Levy PriceFull file,
     source-faithful. This is the family observed for 98 of 99 stores.
@@ -183,6 +206,16 @@ class FileOutcome:
     error_message: str | None = None
 
     stage_durations_seconds: dict[str, float] = field(default_factory=dict)
+
+    # Structural observation carrier (T2/T9 observability contract):
+    # carries the Stores structural classification and unsupported-
+    # structure count analyze_stores_xml() produced for this document
+    # through the composed run_stores() path -- see StoresAnalysis above.
+    # Always None/0 for PriceFull outcomes, which have no structural-
+    # analysis concept, and for any Stores outcome that never reached a
+    # successful parse.
+    structural_classification: str | None = None
+    unsupported_structure_count: int = 0
 
 
 @dataclass(frozen=True)

@@ -54,6 +54,7 @@ from smartcart.collectors.rami_levy.records import (
     RamiLevyPriceItemRawOnline,
     RamiLevyPriceItemRawStandard,
     RamiLevyStoreRaw,
+    StoresAnalysis,
 )
 
 
@@ -116,16 +117,10 @@ def schema_family_of(
     return "online" if isinstance(items[0], RamiLevyPriceItemRawOnline) else "standard"
 
 
-def parse_stores_xml(data: bytes) -> list[RamiLevyStoreRaw]:
-    """Parse a transport-normalized Rami Levy Stores XML document.
-
-    Returns one RamiLevyStoreRaw per <Store> element found, in document
-    order, carrying the ChainID/ChainName/SubChainID/SubChainName each
-    store was nested under. Returns an empty list for a structurally valid
-    document with zero stores -- callers must not conflate "valid XML,
-    zero records" with a parse failure (see validate.py for that check).
-    """
-    root = _parse_xml(data, context="Stores")
+def _extract_store_records(root: ET.Element) -> list[RamiLevyStoreRaw]:
+    """The one real Store-record-extraction implementation -- both
+    analyze_stores_xml() and (via it) parse_stores_xml() use this, never
+    an independent copy of this loop."""
     chain_id = _text(root, "ChainID") or ""
     chain_name = _text(root, "ChainName")
 
@@ -150,6 +145,78 @@ def parse_stores_xml(data: bytes) -> list[RamiLevyStoreRaw]:
                 )
             )
     return stores
+
+
+def analyze_stores_xml(data: bytes) -> StoresAnalysis:
+    """Parse a transport-normalized Rami Levy Stores XML document once and
+    classify its structural shape (T2/T9 observability contract).
+
+    Classification order (first match wins):
+
+    1. One or more supported Store records were emitted (via the same
+       SubChain/Store extraction parse_stores_xml() has always used) ->
+       RECOGNIZED_NONEMPTY, unsupported_structure_count = 0.
+    2. Else, the supported Stores envelope is positively recognized --
+       evidence-backed as a present <SubChains> element, including the
+       empty-but-present <SubChains></SubChains> shape (see
+       tests/collectors/rami_levy/test_parse.py's own EMPTY_STORES_XML) ->
+       RECOGNIZED_EMPTY, unsupported_structure_count = 0. Zero records
+       alone is never sufficient for this state -- the envelope itself
+       must be present.
+    3. Else, evidence-backed unsupported structure is present: one or more
+       <Branch> elements nested under a <Branches> container (the real,
+       physically observed H. Cohen shape) -> NONEMPTY_UNRECOGNIZED,
+       unsupported_structure_count = the number of observed <Branch>
+       elements. Branch field content is never read/parsed here -- only
+       the Branches>Branch structural shape is inspected.
+    4. Else -> UNKNOWN_UNCLASSIFIED, unsupported_structure_count = 0.
+
+    This intentionally does not use any generic repeated-sibling heuristic
+    -- only the two evidence-backed shapes above (SubChains envelope;
+    Branches>Branch) are recognized.
+    """
+    root = _parse_xml(data, context="Stores")
+    records = _extract_store_records(root)
+
+    if records:
+        return StoresAnalysis(
+            records=records,
+            classification="RECOGNIZED_NONEMPTY",
+            unsupported_structure_count=0,
+        )
+
+    if root.find(".//SubChains") is not None:
+        return StoresAnalysis(
+            records=records,
+            classification="RECOGNIZED_EMPTY",
+            unsupported_structure_count=0,
+        )
+
+    branches = root.findall(".//Branches/Branch")
+    if branches:
+        return StoresAnalysis(
+            records=records,
+            classification="NONEMPTY_UNRECOGNIZED",
+            unsupported_structure_count=len(branches),
+        )
+
+    return StoresAnalysis(
+        records=records,
+        classification="UNKNOWN_UNCLASSIFIED",
+        unsupported_structure_count=0,
+    )
+
+
+def parse_stores_xml(data: bytes) -> list[RamiLevyStoreRaw]:
+    """Compatibility records-only API: returns exactly
+    analyze_stores_xml(data).records -- one RamiLevyStoreRaw per <Store>
+    element found, in document order. Returns an empty list for a
+    structurally valid document with zero stores -- callers must not
+    conflate "valid XML, zero records" with a parse failure (see
+    validate.py for that check). This wraps analyze_stores_xml() (a single
+    XML parse); it does not parse independently.
+    """
+    return analyze_stores_xml(data).records
 
 
 def parse_pricefull_xml(

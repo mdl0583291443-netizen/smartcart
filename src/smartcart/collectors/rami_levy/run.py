@@ -94,6 +94,8 @@ def _outcome_from_success(
     validation: ValidationOutcome,
     durations: dict[str, float],
     listing_fetched_at: datetime,
+    structural_classification: str | None = None,
+    unsupported_structure_count: int = 0,
 ) -> FileOutcome:
     return FileOutcome(
         file_kind=file_kind,
@@ -113,6 +115,8 @@ def _outcome_from_success(
         warnings=validation.warnings,
         failed_stage="validation" if validation.hard_failed else None,
         stage_durations_seconds=dict(durations),
+        structural_classification=structural_classification,
+        unsupported_structure_count=unsupported_structure_count,
     )
 
 
@@ -131,7 +135,8 @@ def run_stores(
         filename = discovered.filename
         body = _timed(lambda: download.download_bytes(session, filename), durations, "download")
         normalized = _timed(lambda: transport.normalize(body), durations, "transport")
-        stores = _timed(lambda: parse.parse_stores_xml(normalized), durations, "parse")
+        analysis = _timed(lambda: parse.analyze_stores_xml(normalized), durations, "parse")
+        stores = analysis.records
         validation = _timed(lambda: validate.validate_stores(stores), durations, "validation")
     except DiscoveryError as exc:
         return [], _outcome_from_failure(
@@ -160,6 +165,8 @@ def run_stores(
         validation=validation,
         durations=durations,
         listing_fetched_at=listing_fetched_at,
+        structural_classification=analysis.classification,
+        unsupported_structure_count=analysis.unsupported_structure_count,
     )
     return stores, outcome
 
