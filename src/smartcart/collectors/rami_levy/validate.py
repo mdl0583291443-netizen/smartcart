@@ -114,11 +114,16 @@ def _parse_decimal(raw_value: str | None) -> Decimal | None:
 def validate_stores(stores: list[RamiLevyStoreRaw]) -> ValidationOutcome:
     """Validate parsed Rami Levy Stores records.
 
-    Hard fails on: zero records, any empty store_id, or duplicate
-    store_id values. Warns (does not hard fail) if any store_id's
-    digit-length deviates from the most common width observed in the
-    file -- reconnaissance observed all sampled StoreIDs zero-padded to
-    3 digits, but there is no published spec guaranteeing a fixed width.
+    Hard fails on: zero records, any empty store_id, any empty chain_id,
+    or duplicate store_id values. Warns (does not hard fail) if any
+    store_id's digit-length deviates from the most common width observed
+    in the file -- reconnaissance observed all sampled StoreIDs zero-padded
+    to 3 digits, but there is no published spec guaranteeing a fixed width.
+
+    chain_id emptiness is checked the same way store_id emptiness already
+    is: an empty/whitespace-only string is rejected; any other present
+    value (including an unusual one like "0") is accepted as-is -- this is
+    not an identity/format check, only a required-field-present check.
     """
     hard_fail_reasons: list[str] = []
     warnings: list[str] = []
@@ -130,6 +135,12 @@ def validate_stores(stores: list[RamiLevyStoreRaw]) -> ValidationOutcome:
     empty_id_count = sum(1 for store in stores if not store.store_id.strip())
     if empty_id_count:
         hard_fail_reasons.append(f"{empty_id_count} Store record(s) have an empty store_id.")
+
+    empty_chain_id_count = sum(1 for store in stores if not store.chain_id.strip())
+    if empty_chain_id_count:
+        hard_fail_reasons.append(
+            f"{empty_chain_id_count} Store record(s) have an empty chain_id."
+        )
 
     id_counts = Counter(store.store_id for store in stores if store.store_id.strip())
     duplicates = sorted(store_id for store_id, count in id_counts.items() if count > 1)
