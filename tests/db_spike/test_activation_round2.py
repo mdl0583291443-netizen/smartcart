@@ -94,12 +94,16 @@ def test_retry_after_fully_committed_activation_is_a_safe_noop(
 
     first = activate_occurrence(db_conn, occurrence_id=occ, products=[price("5.00")])
     assert first == ActivationOutcome.APPLIED
-    assert activation_status(db_conn, occ) is not None
+    completed_at_before = activation_status(db_conn, occ)
+    assert completed_at_before is not None
     assert activation_outcome(db_conn, occ) == "applied"
 
     second = activate_occurrence(db_conn, occurrence_id=occ, products=[price("5.00")])
     assert second == ActivationOutcome.ALREADY_APPLIED
     assert activation_outcome(db_conn, occ) == "applied"
+    # A replay must not rewrite activation history by advancing
+    # activation_completed_at -- exact equality, not just non-null.
+    assert activation_status(db_conn, occ) == completed_at_before
 
     history = price_history_for(
         db_conn, chain_id=CHAIN_ID, store_id=store_id, item_code_raw=ITEM_CODE_RAW
