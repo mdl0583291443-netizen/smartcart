@@ -124,6 +124,8 @@ def validate_stores(stores: list[RamiLevyStoreRaw]) -> ValidationOutcome:
     is: an empty/whitespace-only string is rejected; any other present
     value (including an unusual one like "0") is accepted as-is -- this is
     not an identity/format check, only a required-field-present check.
+
+    subchain_id emptiness is checked identically.
     """
     hard_fail_reasons: list[str] = []
     warnings: list[str] = []
@@ -140,6 +142,12 @@ def validate_stores(stores: list[RamiLevyStoreRaw]) -> ValidationOutcome:
     if empty_chain_id_count:
         hard_fail_reasons.append(
             f"{empty_chain_id_count} Store record(s) have an empty chain_id."
+        )
+
+    empty_subchain_id_count = sum(1 for store in stores if not store.subchain_id.strip())
+    if empty_subchain_id_count:
+        hard_fail_reasons.append(
+            f"{empty_subchain_id_count} Store record(s) have an empty subchain_id."
         )
 
     id_counts = Counter(store.store_id for store in stores if store.store_id.strip())
