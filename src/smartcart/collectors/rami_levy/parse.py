@@ -249,10 +249,38 @@ def _pricefull_items(root: ET.Element) -> list[ET.Element]:
     return items_container.findall("Item") if items_container is not None else []
 
 
+def _standard_family_root_store_id(root: ET.Element) -> str:
+    """Root-level store identity for the standard PriceFull family.
+
+    The standard family's own tag is <StoreID>, but a real, observed
+    variant (Politzer, ART-0020) carries the online family's <StoreId>
+    casing at the root of an otherwise-standard document, with <StoreID>
+    absent. Both are accepted here as aliases of the same source-native
+    identity value; if both are present and disagree, this fails closed
+    (ParseError) rather than silently preferring one over the other. This
+    is deliberately narrow to exactly this one identity field -- it is not
+    a general case-insensitive tag lookup.
+    """
+    upper = _text(root, "StoreID")
+    lower = _text(root, "StoreId")
+    if upper is not None and lower is not None:
+        if upper != lower:
+            raise ParseError(
+                f"Conflicting root store identity in standard PriceFull document: "
+                f"<StoreID>{upper}</StoreID> disagrees with <StoreId>{lower}</StoreId>."
+            )
+        return upper
+    if upper is not None:
+        return upper
+    if lower is not None:
+        return lower
+    return ""
+
+
 def _parse_pricefull_standard(root: ET.Element) -> list[RamiLevyPriceItemRawStandard]:
     chain_id = _text(root, "ChainID") or ""
     subchain_id = _text(root, "SubChainID") or ""
-    store_id = _text(root, "StoreID") or ""
+    store_id = _standard_family_root_store_id(root)
     bikoret_no = _text(root, "BikoretNo")
 
     items: list[RamiLevyPriceItemRawStandard] = []
