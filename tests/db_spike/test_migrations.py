@@ -15,6 +15,7 @@ _EXPECTED_TABLES = {
     "chain_product_assignment_history",
     "chain_product_current_assignment",
     "ingestion_run",
+    "normalized_occurrence_evidence",
     "price_history",
     "smartcart_product",
     "store",
@@ -52,4 +53,5 @@ def test_migrations_are_tracked_in_schema_migrations(db_conn: pg8000.native.Conn
         "0005_product_identity_slice_a.sql",
         "0006_product_identity_current_assignment.sql",
         "0007_chain_product_assignment_history.sql",
+        "0008_normalized_occurrence_evidence.sql",
     ]
