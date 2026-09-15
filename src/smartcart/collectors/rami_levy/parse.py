@@ -117,16 +117,48 @@ def schema_family_of(
     return "online" if isinstance(items[0], RamiLevyPriceItemRawOnline) else "standard"
 
 
+def _stores_identity_alias(
+    element: ET.Element, upper_tag: str, lower_tag: str, *, field: str
+) -> str:
+    """One Stores identity field's value, accepting exactly the two
+    observed real-world tag-name aliases for it (e.g. "ChainID"/
+    "ChainId"). Mirrors _standard_family_root_store_id's conflict
+    discipline: if both aliases are present and their values disagree,
+    this fails closed (ParseError) rather than silently preferring one.
+    Deliberately narrow to exactly these named tag pairs -- not a general
+    case-insensitive tag lookup. Missing-field handling remains
+    validate.py's responsibility, not this function's -- it returns ""
+    when neither alias is present, exactly like the uppercase-only lookup
+    it replaces.
+    """
+    upper = _text(element, upper_tag)
+    lower = _text(element, lower_tag)
+    if upper is not None and lower is not None:
+        if upper != lower:
+            raise ParseError(
+                f"Conflicting Stores {field} identity: <{upper_tag}>{upper}</{upper_tag}> "
+                f"disagrees with <{lower_tag}>{lower}</{lower_tag}>."
+            )
+        return upper
+    if upper is not None:
+        return upper
+    if lower is not None:
+        return lower
+    return ""
+
+
 def _extract_store_records(root: ET.Element) -> list[RamiLevyStoreRaw]:
     """The one real Store-record-extraction implementation -- both
     analyze_stores_xml() and (via it) parse_stores_xml() use this, never
     an independent copy of this loop."""
-    chain_id = _text(root, "ChainID") or ""
+    chain_id = _stores_identity_alias(root, "ChainID", "ChainId", field="chain_id")
     chain_name = _text(root, "ChainName")
 
     stores: list[RamiLevyStoreRaw] = []
     for subchain in root.findall(".//SubChain"):
-        subchain_id = _text(subchain, "SubChainID") or ""
+        subchain_id = _stores_identity_alias(
+            subchain, "SubChainID", "SubChainId", field="subchain_id"
+        )
         subchain_name = _text(subchain, "SubChainName")
         for store in subchain.findall("./Stores/Store"):
             stores.append(
@@ -135,7 +167,7 @@ def _extract_store_records(root: ET.Element) -> list[RamiLevyStoreRaw]:
                     chain_name=chain_name,
                     subchain_id=subchain_id,
                     subchain_name=subchain_name,
-                    store_id=_text(store, "StoreID") or "",
+                    store_id=_stores_identity_alias(store, "StoreID", "StoreId", field="store_id"),
                     bikoret_no=_text(store, "BikoretNo"),
                     store_type=_text(store, "StoreType"),
                     store_name=_text(store, "StoreName"),
