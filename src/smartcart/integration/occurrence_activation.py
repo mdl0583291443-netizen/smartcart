@@ -1,9 +1,22 @@
 """Normalize -> persistence integration seam: occurrence/batch-scoped glue
-between already-normalized NormalizedPriceItems and the existing, unchanged
-catalog/activation engine. Resolves the batch's store once (via
-catalog.get_or_create_store_by_alias) and delegates the whole mapped batch
-to activate_occurrence in one call; owns no idempotency, retry, or
-transaction logic of its own -- that remains activate_occurrence's alone."""
+between already-normalized NormalizedPriceItems and the existing catalog,
+evidence-persistence, and activation engines.
+
+Frozen T13 sequence: (1) validate the batch's own internal
+chain/store/collected_at agreement, (2) resolve the batch's store once
+(via catalog.get_or_create_store_by_alias), (3) build the ordered
+NormalizedActivationItem sequence, (4) durably persist that sequence as
+normalized replay evidence (persist_normalized_occurrence_evidence) in its
+own committed transaction, and only then (5) attempt the real
+activate_occurrence() in a later, separate transaction. Evidence
+persistence and activation are never nested in one transaction: a later
+DEFERRED activation outcome, or an activation error, never undoes evidence
+already committed in step (4). This seam's own role is coordination only:
+it sequences store resolution, evidence persistence, and activation in
+that fixed order, while each of those three modules retains ownership of
+its own internal behavior -- concurrent-replay idempotency belongs to
+persist_normalized_occurrence_evidence, and ordering/retry-after-DEFERRED
+belongs to activate_occurrence; this seam implements neither itself."""
 
 from __future__ import annotations
 
@@ -18,6 +31,7 @@ from smartcart.db_spike.activation import (
     activate_occurrence,
 )
 from smartcart.db_spike.catalog import get_or_create_store_by_alias
+from smartcart.db_spike.normalized_evidence import persist_normalized_occurrence_evidence
 from smartcart.normalize.contract import NormalizedPriceItem
 
 
@@ -82,6 +96,10 @@ def activate_normalized_occurrence(
         )
         for item in items
     ]
+
+    persist_normalized_occurrence_evidence(
+        conn, occurrence_id=context.occurrence_id, items=normalized_items
+    )
 
     return activate_occurrence(
         conn,

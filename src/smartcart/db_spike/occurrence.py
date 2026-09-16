@@ -51,6 +51,15 @@ def insert_occurrence(
     function does not validate or coerce that; it cannot be reconstructed
     after the fact, so it is the caller's responsibility to pass the right
     value at the right moment.
+
+    Every historical, provenance, and validation fact this INSERT fixes
+    (including chain_id, store_id, artifact_kind, collected_at,
+    validation_status, and validation_detail) becomes immutable the moment
+    it commits, per ADR 0011 §8 (Owner-approved): only
+    activation_completed_at/activation_outcome remain mutable afterward,
+    routine production deletion of the row is prohibited, and any
+    correction or revalidation must be additive (a new occurrence or a
+    future correction/version event), never a mutation of this row.
     """
     if validation_status not in _KNOWN_VALIDATION_STATUSES:
         raise ValueError(

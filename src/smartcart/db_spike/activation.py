@@ -262,13 +262,19 @@ def activate_occurrence(
 
     Algorithm (all inside one transaction):
 
-    1. Read the occurrence's immutable identity fields (chain_id,
-       store_id, artifact_kind, validation_status, collected_at) -- these
-       are set once at insert and never mutated, so reading them requires
-       no lock. Raises ValueError if the occurrence does not exist, or is
-       not a valid, store-scoped occurrence (this function's contract is
-       scoped to exactly that; a non-'pricefull' or non-'valid' occurrence
-       never has derived state and must not be passed here).
+    1. Read five of the occurrence's immutable occurrence facts (chain_id,
+       store_id, artifact_kind, validation_status, collected_at) -- the
+       subset of ADR 0011 §8's full immutable-fact list this function's
+       eligibility decision uses. Per that Owner-approved, system-wide
+       contract, none of these can change after insert and routine
+       production code cannot delete the row, so reading them here
+       requires no lock. A future mutation or deletion mechanism (none
+       exists or is designed today) would require this function's locking
+       and eligibility design to be reconsidered. Raises ValueError if the
+       occurrence does not exist, or is not a valid, store-scoped
+       occurrence (this function's contract is scoped to exactly that; a
+       non-'pricefull' or non-'valid' occurrence never has derived state
+       and must not be passed here).
     2. Lock the occurrence's Store row (`SELECT ... FOR UPDATE`) -- the
        fixed per-store serialization anchor. This is acquired before any
        ordering/idempotency check below, and held until this transaction

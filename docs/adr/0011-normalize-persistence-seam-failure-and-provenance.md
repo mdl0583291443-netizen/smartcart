@@ -165,6 +165,13 @@ and the requirements/invariants inspection that preceded this ADR).
   version only).
 - Current-state normalized-field write semantics (§4).
 - `price_history` remains price-only.
+- All occurrence historical/provenance/validation facts fixed at insert
+  (§8's full list — not just `chain_id`/`store_id`/`collected_at`) are
+  immutable afterward; only `activation_completed_at`/`activation_outcome`
+  remain mutable; routine deletion of `artifact_occurrence` is prohibited;
+  corrections/revalidation must be additive through a new occurrence or a
+  future correction/version event — an open required precondition before
+  rebuild, publication, or first production ingestion (§8).
 
 **Deferred / not frozen:**
 - Rejection-report table/schema.
@@ -174,6 +181,69 @@ and the requirements/invariants inspection that preceded this ADR).
 - Future `NormalizedPriceItem` contract versions (2+).
 - Normalized quantity-history schema.
 - Whether/when legacy backfill becomes necessary.
+
+### 8. Occurrence fact immutability (Owner-approved, system-wide)
+
+This decision is broader than the normalize-to-persistence seam this ADR
+otherwise scopes — it governs `artifact_occurrence` itself — and is
+recorded here because this ADR is the existing home for persistence-layer
+invariants, and because the normalized evidence-persistence seam
+(`persist_normalized_occurrence_evidence`) is one of the seams relying on
+it. **This revision supersedes an earlier, narrower version of this
+section that covered only `chain_id`, `store_id`, and `collected_at`; the
+Owner has since explicitly approved Option C, the general occurrence-fact
+rule below** (see `docs/work-log.md` WL-0038).
+
+**Immutable historical facts.** Every fact recorded when an
+`artifact_occurrence` row is created is immutable afterward. In the
+current schema this is: `occurrence_id`, `content_id`, `ingestion_run_id`,
+`chain_id`, `store_id`, `artifact_kind`, `source_filename`,
+`schema_family`, `collected_at`, `validation_status`, `validation_detail`,
+and `created_at`. These are occurrence historical, provenance, and
+validation facts — not uniformly "identity fields"; some (e.g.
+`validation_status`, `validation_detail`) are validation *outcomes*, not
+identity, but all are equally immutable once recorded, under this
+decision.
+
+**Mutable operational metadata.** Only `activation_completed_at` and
+`activation_outcome` may currently be updated after insertion —
+`activate_occurrence()` continues to update only these two columns,
+exactly as today. Any future schema column MUST be explicitly classified,
+at the time it is added, as either an immutable historical occurrence fact
+or explicitly mutable operational metadata. A future column MUST NOT
+become mutable merely because it is absent from the list above — absence
+from an already-frozen list is not itself a classification.
+
+**Deletion.** Routine production code MUST NOT delete an
+`artifact_occurrence` row. Any future exceptional deletion mechanism (e.g.
+retention/compliance tooling) would require its own explicit design,
+authorization, safety rules, and coordination; none is designed here.
+
+**Corrections and revalidation.** Corrections and revalidation MUST be
+additive. A changed validation result, or any other correction, MUST be
+represented by a new occurrence row or another explicitly designed future
+correction/version event — it MUST NOT mutate `validation_status`,
+`validation_detail`, or any other fact on the original row. No such
+correction/revalidation mechanism exists yet; this decision does not claim
+one does.
+
+**OPEN REQUIRED PRECONDITION — Occurrence correction/revalidation.** An
+additive correction/revalidation mechanism MUST be designed before: (a)
+rebuild, (b) publication, or (c) first real production ingestion. Until
+that mechanism exists, existing occurrences MUST NOT be revalidated or
+corrected in place. This is a required precondition for those three
+capabilities specifically — it is not a new commit/push approval gate for
+this documentation-only decision itself.
+
+**Enforcement today.** This is a contractual guarantee, not (yet) a
+structurally enforced one: no current production code path mutates any of
+the facts listed above after insert, and no current production code path
+deletes an `artifact_occurrence` row (repository-wide reconnaissance; see
+`docs/work-log.md` WL-0037 and WL-0038). Database-level enforcement (e.g.
+a trigger rejecting such an UPDATE/DELETE) is explicitly NOT part of this
+decision and remains possible future work — adding it would be a separate
+behavioral increment requiring its own design and tests, not implied or
+authorized by this documentation-only decision.
 
 ## Consequences
 
@@ -195,3 +265,15 @@ and the requirements/invariants inspection that preceded this ADR).
   the second `NormalizedPriceItem` contract version, quantity-history
   design, or a legacy-backfill trigger/threshold. Each remains open,
   evidence-driven future work.
+- Occurrence fact immutability (§8) is now an explicit, Owner-approved,
+  general contract (Option C) covering every historical/provenance/
+  validation fact fixed at insert, not merely `chain_id`/`store_id`/
+  `collected_at` as an earlier, narrower version of this section stated —
+  `persist_normalized_occurrence_evidence()`'s lock-ordering design
+  (`store` `FOR KEY SHARE` before occurrence `FOR NO KEY UPDATE`) and
+  `activate_occurrence()`'s pre-existing lock-free read of its five-fact
+  eligibility subset both rely on it. Database-level enforcement remains
+  deferred, separate future work — this ADR does not decide it either. An
+  additive correction/revalidation mechanism remains an open required
+  precondition before rebuild, publication, or first production ingestion
+  (§8).
